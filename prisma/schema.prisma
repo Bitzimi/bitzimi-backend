@@ -1,0 +1,1759 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  passwordHash  String    @map("password_hash")
+  role          String    @default("user")
+  referralCode  String    @unique @map("referral_code")   // BZR-prefix — used in ?ref= links
+  affiliateCode String    @unique @map("affiliate_code")  // BZA-prefix — used in ?aff= links
+  uplineId       String?   @map("upline_id")
+  programLevel   String    @default("referral") @map("program_level")  // referral|affiliate|ambassador
+  ambassadorCode String?   @unique @map("ambassador_code")              // @username — set on approval
+  emailVerified  Boolean   @default(false) @map("email_verified")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+  suspendedAt   DateTime? @map("suspended_at")
+  suspendedBy   String?   @map("suspended_by")
+  deletedAt     DateTime? @map("deleted_at")
+
+  upline    User?  @relation("Referrals", fields: [uplineId], references: [id])
+  downlines User[] @relation("Referrals")
+
+  profile         UserProfile?
+  wallets         Wallet[]
+  authTokens      AuthToken[]
+  securityPin     SecurityPin?
+  kyc             KycSubmission?
+  subscription    Subscription?
+  vipStreak       VipStreak?
+  withdrawalLimit WithdrawalLimit?
+  transactions    Transaction[]
+  deposits        Deposit[]
+  withdrawals     Withdrawal[]
+
+  tasksCreated Task[]      @relation("TaskCreator")
+  taskProofs   TaskProof[] @relation("ProofUser")
+  referralsSent     Referral[]            @relation("ReferralsSent")
+  referralReceived  Referral?             @relation("ReferralReceived")
+  commissionsEarned AffiliateCommission[] @relation("CommissionBeneficiary")
+  gameBets          GameBet[]             @relation("UserGameBets")
+  gameStats         GameStat[]            @relation("UserGameStats")
+  matchmakingQueues MatchmakingQueue[]    @relation("UserQueues")
+  pvpMatchesAsP1    PvpMatch[]            @relation("MatchPlayer1")
+  pvpMatchesAsP2    PvpMatch[]            @relation("MatchPlayer2")
+  privateRoomsAsHost  PrivateRoom[]         @relation("RoomHost")
+  privateRoomsAsGuest PrivateRoom[]         @relation("RoomGuest")
+  notifications        Notification[]        @relation("UserNotifications")
+  auditLogs            AuditLog[]            @relation("AuditActor")
+  affiliateApplication  AffiliateApplication?
+  ambassadorApplication AmbassadorApplication?
+  activityScore         AmbassadorActivityScore?
+  footballPoints        FootballPointsBalance?
+  hubClaims             FootballHubDailyClaim[]
+  challengeEntriesRef   ChallengeEntry[]        @relation("ChallengeReferrer")
+  challengeEntriesRefd  ChallengeEntry[]        @relation("ChallengeReferred")
+  challengeRewards      ChallengeReward[]
+  poolDistributions     AmbassadorPoolDistribution[]
+  vipGrants             VipGrant[]
+  featuredRequests      FeaturedRequest[]
+
+  @@map("users")
+}
+
+model UserProfile {
+  userId        String   @id @map("user_id")
+  username      String   @unique
+  fullName      String?  @map("full_name")
+  avatarUrl     String?  @map("avatar_url")
+  phoneNumber   String?  @map("phone_number")
+  phoneVerified Boolean  @default(false) @map("phone_verified")
+  languagePref  String   @default("en")   @map("language_pref")
+  currencyPref  String   @default("USD")  @map("currency_pref")
+  themePref     String   @default("dark") @map("theme_pref")
+  // Payment details (encrypted at rest in production)
+  usdtAddress      String?  @map("usdt_address")
+  bankAccountName  String?  @map("bank_account_name")
+  bankAccountNumber String? @map("bank_account_number")
+  bankName         String?  @map("bank_name")
+  // Google 2FA
+  twoFactorEnabled Boolean @default(false) @map("two_factor_enabled")
+  twoFactorSecret  String? @map("two_factor_secret")  // base32 TOTP secret
+  // Address (editable until KYC is verified; locked after)
+  addressStreet              String?  @map("address_street")
+  addressCity                String?  @map("address_city")
+  addressState               String?  @map("address_state")
+  addressCountry             String?  @map("address_country")
+  addressPostalCode          String?  @map("address_postal_code")
+  addressLockedByVerification Boolean @default(false) @map("address_locked_by_verification")
+  // Username rate-limiting (editable once per 30 days)
+  lastUsernameEdit DateTime? @map("last_username_edit")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_profiles")
+}
+
+model AuthToken {
+  id         String    @id @default(uuid())
+  userId     String    @map("user_id")
+  tokenHash  String    @map("token_hash")
+  deviceId   String    @map("device_id")
+  expiresAt  DateTime  @map("expires_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  revokedAt  DateTime? @map("revoked_at")
+  revokedBy  String?   @map("revoked_by")
+  ipAddress  String?   @map("ip_address")
+  userAgent  String?   @map("user_agent")
+  lastSeenAt DateTime? @map("last_seen_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([tokenHash])
+  @@map("auth_tokens")
+}
+
+model SecurityPin {
+  userId    String   @id @map("user_id")
+  pinHash   String   @map("pin_hash")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("security_pins")
+}
+
+// Full KYC submission — all document keys point to object storage paths
+model KycSubmission {
+  id               String    @id @default(uuid())
+  userId           String    @unique @map("user_id")
+  status           String    @default("unverified")  // unverified|pending|under_review|verified|rejected
+  countryCode      String?   @map("country_code")
+  idType           String?   @map("id_type")
+  fullName         String?   @map("full_name")
+  dateOfBirth      String?   @map("date_of_birth")   // ISO date string
+  address          String?
+  city             String?
+  state            String?
+  country          String?
+  postalCode       String?   @map("postal_code")
+  frontDocKey      String?   @map("front_doc_key")   // storage key
+  backDocKey       String?   @map("back_doc_key")
+  selfieKey        String?   @map("selfie_key")
+  poaKey           String?   @map("poa_key")
+  faceConfidence   Float?    @map("face_confidence")
+  addressMatch     Boolean?  @map("address_match")
+  reviewedBy       String?   @map("reviewed_by")
+  reviewedAt       DateTime? @map("reviewed_at")
+  rejectionReason  String?   @map("rejection_reason")
+  submittedAt      DateTime? @map("submitted_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("kyc_submissions")
+}
+
+model Subscription {
+  userId      String    @id @map("user_id")
+  plan        String    @default("monthly")
+  price       Float
+  isActive    Boolean   @default(true) @map("is_active")
+  startedAt   DateTime  @default(now()) @map("started_at")
+  endsAt      DateTime  @map("ends_at")
+  cancelledAt DateTime? @map("cancelled_at")
+  paymentRef  String?   @map("payment_ref")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("subscriptions")
+}
+
+model VipStreak {
+  userId        String    @id @map("user_id")
+  currentStreak Int       @default(0) @map("current_streak")
+  lastClaimDate DateTime? @map("last_claim_date")
+  totalEarned   Float     @default(0) @map("total_earned")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("vip_streaks")
+}
+
+model WithdrawalLimit {
+  userId           String   @id @map("user_id")
+  dailyUsed        Float    @default(0) @map("daily_used")
+  monthlyUsed      Float    @default(0) @map("monthly_used")
+  lastDailyReset   DateTime @default(now()) @map("last_daily_reset")
+  lastMonthlyReset DateTime @default(now()) @map("last_monthly_reset")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("withdrawal_limits")
+}
+
+model Wallet {
+  id           String    @id @default(uuid())
+  userId       String    @map("user_id")
+  walletType   String    @map("wallet_type")
+  balance      Float     @default(0)
+  lockedAmount Float     @default(0) @map("locked_amount")
+  isFrozen     Boolean   @default(false) @map("is_frozen")
+  frozenAt     DateTime? @map("frozen_at")
+  frozenBy     String?   @map("frozen_by")
+  frozenReason String?   @map("frozen_reason")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, walletType])
+  @@index([userId])
+  @@map("wallets")
+}
+
+model Transaction {
+  id            String   @id @default(uuid())
+  userId        String   @map("user_id")
+  type          String
+  fromWallet    String?  @map("from_wallet")
+  toWallet      String?  @map("to_wallet")
+  amount        Float
+  fee           Float    @default(0)
+  netAmount     Float    @map("net_amount")
+  referenceId   String?  @map("reference_id")
+  referenceType String?  @map("reference_type")
+  status        String   @default("completed")
+  description   String?
+  metadata      String?
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("transactions")
+}
+
+model Deposit {
+  id              String    @id @default(uuid())
+  userId          String    @map("user_id")
+  requestedAmount Float     @map("requested_amount")
+  memoAmount      Float     @map("memo_amount")
+  paymentMethod   String    @map("payment_method")
+  paymentAddress  String?   @map("payment_address")
+  status          String    @default("pending")
+  txHash          String?   @map("tx_hash")
+  confirmedBy     String?   @map("confirmed_by")
+  expiresAt       DateTime  @map("expires_at")
+  confirmedAt     DateTime? @map("confirmed_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("deposits")
+}
+
+model Withdrawal {
+  id              String    @id @default(uuid())
+  userId          String    @map("user_id")
+  amount          Float
+  fee             Float
+  netAmount       Float     @map("net_amount")
+  destination     String
+  paymentMethod   String    @map("payment_method")
+  status          String    @default("submitted")
+  pinVerified     Boolean   @default(false) @map("pin_verified")
+  processedBy     String?   @map("processed_by")
+  rejectionReason String?   @map("rejection_reason")
+  txHash          String?   @map("tx_hash")
+  submittedAt     DateTime  @default(now()) @map("submitted_at")
+  processedAt     DateTime? @map("processed_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("withdrawals")
+}
+
+// ── Tasks ─────────────────────────────────────────────────────────────────────
+
+model Task {
+  id                String    @id @default(uuid())
+  advertiserId      String    @map("advertiser_id")
+  advertiserName    String    @map("advertiser_name")
+  title             String
+  description       String?
+  type              String                          // category slug (20 categories)
+  status            String    @default("pending_review")  // pending_review|active|paused|completed|rejected
+  totalBudget       Float     @map("total_budget")
+  totalReward       Float     @map("total_reward")
+  rewardPerSlot     Float     @map("reward_per_slot")
+  totalSlots        Int       @map("total_slots")
+  completedSlots    Int       @default(0) @map("completed_slots")
+  link              String?
+  campaignImageUrl  String?   @map("campaign_image_url")
+  requirements      String    @default("[]")        // JSON array stored as text
+  proofType         String?   @map("proof_type")
+  proofInstructions String?   @map("proof_instructions")
+  expiresAt         DateTime? @map("expires_at")
+  approvedBy        String?   @map("approved_by")
+  approvedAt        DateTime? @map("approved_at")
+  rejectedBy        String?   @map("rejected_by")
+  rejectedAt        DateTime? @map("rejected_at")
+  rejectionReason   String?   @map("rejection_reason")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  advertiser           User                      @relation("TaskCreator", fields: [advertiserId], references: [id])
+  proofs               TaskProof[]
+  referenceScreenshots TaskReferenceScreenshot[]
+
+  @@index([status, createdAt(sort: Desc)])
+  @@index([advertiserId])
+  @@map("tasks")
+}
+
+model TaskReferenceScreenshot {
+  id         String   @id @default(uuid())
+  taskId     String   @map("task_id")
+  storageKey String   @map("storage_key")
+  slot       Int      @default(0)
+  uploadedAt DateTime @default(now()) @map("uploaded_at")
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@map("task_reference_screenshots")
+}
+
+model TaskProof {
+  id           String    @id @default(uuid())
+  taskId       String    @map("task_id")
+  userId       String    @map("user_id")
+  status       String    @default("pending_ai")  // pending_ai|approved|review|rejected|admin_approved|admin_rejected
+  aiConfidence Float?    @map("ai_confidence")
+  aiAnalysis   String?   @map("ai_analysis")
+  aiVerdict    String?   @map("ai_verdict")
+  rewardPaid   Boolean   @default(false) @map("reward_paid")
+  rewardAmount Float?    @map("reward_amount")
+  processedAt  DateTime? @map("processed_at")
+  submittedAt  DateTime  @default(now()) @map("submitted_at")
+
+  task        Task                   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user        User                   @relation("ProofUser", fields: [userId], references: [id], onDelete: Cascade)
+  screenshots TaskProofScreenshot[]
+  adminReview AdminProofReview?
+
+  @@unique([taskId, userId])
+  @@index([status])
+  @@map("task_proofs")
+}
+
+model TaskProofScreenshot {
+  id         String   @id @default(uuid())
+  proofId    String   @map("proof_id")
+  storageKey String   @map("storage_key")
+  slot       Int      @default(0)
+  uploadedAt DateTime @default(now()) @map("uploaded_at")
+
+  proof TaskProof @relation(fields: [proofId], references: [id], onDelete: Cascade)
+
+  @@map("task_proof_screenshots")
+}
+
+model AdminProofReview {
+  id           String    @id @default(uuid())
+  proofId      String    @unique @map("proof_id")
+  taskId       String    @map("task_id")
+  userId       String    @map("user_id")
+  aiConfidence Float?    @map("ai_confidence")
+  aiAnalysis   String?   @map("ai_analysis")
+  decision     String?                            // approved | rejected
+  decisionNote String?   @map("decision_note")
+  reviewedBy   String?   @map("reviewed_by")
+  reviewedAt   DateTime? @map("reviewed_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  proof TaskProof @relation(fields: [proofId], references: [id], onDelete: Cascade)
+
+  @@map("admin_proof_reviews")
+}
+
+// ── Referrals & Affiliates ────────────────────────────────────────────────────
+
+model Referral {
+  id               String    @id @default(uuid())
+  referrerId       String    @map("referrer_id")
+  referredId       String    @unique @map("referred_id")
+  tier             Int                                    // always 1 at creation
+  isActive         Boolean   @default(false) @map("is_active")
+  activatedAt      DateTime? @map("activated_at")
+  referralRewarded Boolean   @default(false) @map("referral_rewarded") // one-time $0.50 bonus paid
+  rewardedAt       DateTime? @map("rewarded_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  referrer User @relation("ReferralsSent",    fields: [referrerId], references: [id], onDelete: Cascade)
+  referred User @relation("ReferralReceived", fields: [referredId], references: [id], onDelete: Cascade)
+
+  @@index([referrerId])
+  @@map("referrals")
+}
+
+model AffiliateCommission {
+  id            String   @id @default(uuid())
+  beneficiaryId String   @map("beneficiary_id")
+  sourceUserId  String   @map("source_user_id")
+  tier          Int                                 // 1, 2, or 3
+  eventType     String   @map("event_type")         // vip_subscription|task_completion|game_fee|game_fee_multi
+  eventRefId    String?  @map("event_ref_id")        // taskId, proofId, gameRoundId, etc.
+  grossAmount   Float    @map("gross_amount")        // base amount commissions are calculated from
+  rate          Float                               // e.g. 0.28
+  commission    Float                               // grossAmount * rate
+  status        String   @default("paid")           // paid|pending (Phase 3H: async payout)
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  beneficiary User @relation("CommissionBeneficiary", fields: [beneficiaryId], references: [id], onDelete: Cascade)
+
+  @@index([beneficiaryId])
+  @@index([sourceUserId])
+  @@index([eventRefId])
+  @@map("affiliate_commissions")
+}
+
+model AffiliateApplication {
+  id              String    @id @default(uuid())
+  userId          String    @unique @map("user_id")
+  status          String    @default("pending")       // pending|approved|rejected
+  fullName        String    @map("full_name")
+  socialPlatform  String    @map("social_platform")   // facebook|x|telegram|whatsapp|instagram|youtube|tiktok|discord
+  socialLink      String    @map("social_link")
+  socialUsername  String    @map("social_username")   // claimed username / page / channel name
+  totalMembers    Int       @map("total_members")     // self-reported audience size (admin verifies)
+  screenshotKey   String?   @map("screenshot_key")    // storage key for ownership/admin-access screenshot
+  reviewedBy      String?   @map("reviewed_by")
+  reviewedAt      DateTime? @map("reviewed_at")
+  rejectionReason String?   @map("rejection_reason")
+  submittedAt     DateTime  @default(now()) @map("submitted_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@map("affiliate_applications")
+}
+
+// ── Commission Job Queue — DB-backed reliable processing ──────────────────────
+// Replaces setImmediate fire-and-forget for all commission and referral bonus events.
+// Ensures no commissions are lost on server crash. Worker polls every 10s.
+// Idempotency is guaranteed by distributeCommissions' eventRefId guard.
+
+model CommissionJob {
+  id           String    @id @default(uuid())
+  jobType      String    @map("job_type")     // distribute_commissions | pay_referral_bonus
+  status       String    @default("pending")  // pending|processing|completed|failed
+  payload      String                         // JSON — all parameters needed to execute the job
+  attempts     Int       @default(0)
+  maxAttempts  Int       @default(3)          @map("max_attempts")
+  errorMessage String?   @map("error_message")
+  createdAt    DateTime  @default(now())      @map("created_at")
+  updatedAt    DateTime  @updatedAt           @map("updated_at")
+  processedAt  DateTime? @map("processed_at")
+
+  @@index([status, createdAt])
+  @@map("commission_jobs")
+}
+
+// ── Game System ───────────────────────────────────────────────────────────────
+
+model GameRound {
+  id               String    @id @default(uuid())
+  gameType         String    @map("game_type")    // color_game|spin_battle|...
+  lobbyId          String?   @map("lobby_id")     // A|B|C|D (for Color Game + SpinBattle)
+  roundNumber      Int       @map("round_number")
+  status           String    @default("waiting")  // waiting|spinning|result|completed|cancelled
+  resultData       String?   @map("result_data")  // JSON sealed until spin phase
+  startedAt        DateTime  @default(now()) @map("started_at")
+  settledAt        DateTime? @map("settled_at")
+  // Phase 11 — Provably Fair
+  serverSeed       String?   @map("server_seed")       // revealed after settlement
+  serverSeedHash   String?   @map("server_seed_hash")  // published at round start
+  clientSeed       String?   @map("client_seed")       // set when bets lock
+  nonce            Int?                                // equals roundNumber
+  // Phase 11 — Daily Display Round Number (Color Prediction only)
+  dailyRoundNumber Int?      @map("daily_round_number")
+  // Phase 19 — Verification ID (e.g. BZM-CP-A1B2C3D4)
+  verificationId   String?   @unique @map("verification_id")
+
+  bets GameBet[]
+
+  @@unique([gameType, lobbyId, roundNumber])
+  @@index([gameType, lobbyId, status])
+  @@map("game_rounds")
+}
+
+model GameBet {
+  id          String    @id @default(uuid())
+  roundId     String    @map("round_id")
+  userId      String    @map("user_id")
+  amount      Float
+  betData     String    @map("bet_data")     // JSON: {team, side, diceValue, etc}
+  outcome     String?                        // win|loss|draw
+  payout      Float?
+  platformFee Float?    @map("platform_fee")
+  settled     Boolean   @default(false)
+  placedAt    DateTime  @default(now()) @map("placed_at")
+  settledAt   DateTime? @map("settled_at")
+
+  round GameRound @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  user  User      @relation("UserGameBets", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([roundId])
+  @@index([userId])
+  @@map("game_bets")
+}
+
+model GameStat {
+  userId       String @map("user_id")
+  gameType     String @map("game_type")
+  totalGames   Int    @default(0) @map("total_games")
+  wins         Int    @default(0)
+  losses       Int    @default(0)
+  totalWagered Float  @default(0) @map("total_wagered")
+  totalWon     Float  @default(0) @map("total_won")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  user User @relation("UserGameStats", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, gameType])
+  @@map("game_stats")
+}
+
+// ── 1v1 Matchmaking (Dice Clash, Coin Flip, Reaction Tap) ────────────────────
+
+model MatchmakingQueue {
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  gameType  String    @map("game_type")    // dice_clash|pvp_coinflip|reaction_tap
+  stake     Float
+  status    String    @default("waiting")  // waiting|matched|cancelled
+  matchId   String?   @map("match_id")
+  createdAt DateTime  @default(now()) @map("created_at")
+  expiresAt DateTime  @map("expires_at")  // 5 min TTL
+
+  user  User      @relation("UserQueues", fields: [userId], references: [id], onDelete: Cascade)
+  match PvpMatch? @relation("QueueMatch", fields: [matchId], references: [id])
+
+  @@index([gameType, stake, status])
+  @@map("matchmaking_queues")
+}
+
+model PvpMatch {
+  id            String    @id @default(uuid())
+  gameType      String    @map("game_type")
+  stake         Float
+  player1Id     String    @map("player1_id")
+  player2Id     String    @map("player2_id")
+  status        String    @default("active")  // active|settled|cancelled
+  winnerId      String?   @map("winner_id")
+  resultData    String?   @map("result_data") // JSON
+  // ReactionTap: timing data
+  signalSentAt  DateTime? @map("signal_sent_at")
+  player1TapMs  Int?      @map("player1_tap_ms")
+  player2TapMs  Int?      @map("player2_tap_ms")
+  player1Ready  Boolean   @default(false) @map("player1_ready")
+  player2Ready  Boolean   @default(false) @map("player2_ready")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  settledAt     DateTime? @map("settled_at")
+  // Phase 11 — Provably Fair
+  serverSeed     String?  @map("server_seed")
+  serverSeedHash String?  @map("server_seed_hash")
+  clientSeed     String?  @map("client_seed")
+  nonce          Int?
+  // Phase 19 — Verification ID (BZM-CF-XXXXXXXX or BZM-DC-XXXXXXXX; null for reaction_tap)
+  verificationId String?  @unique @map("verification_id")
+
+  player1 User               @relation("MatchPlayer1", fields: [player1Id], references: [id])
+  player2 User               @relation("MatchPlayer2", fields: [player2Id], references: [id])
+  queues  MatchmakingQueue[] @relation("QueueMatch")
+
+  @@map("pvp_matches")
+}
+
+// ── Private Room — shared by Coin Flip, Dice Clash, Reaction Tap ─────────────
+model PrivateRoom {
+  id                String    @id @default(uuid())
+  code              String    @unique                // 6-char alphanumeric invite code
+  gameType          String    @map("game_type")      // dice_clash|pvp_coinflip|reaction_tap
+  stake             Float
+  hostId            String    @map("host_id")
+  guestId           String?   @map("guest_id")
+  status            String    @default("waiting")    // waiting|ready|active|rematch|completed|cancelled
+  currentMatchId    String?   @map("current_match_id")
+  rematchHostReady  Boolean   @default(false) @map("rematch_host_ready")
+  rematchGuestReady Boolean   @default(false) @map("rematch_guest_ready")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  expiresAt         DateTime  @map("expires_at")     // 24 h TTL
+
+  host  User  @relation("RoomHost",  fields: [hostId],  references: [id])
+  guest User? @relation("RoomGuest", fields: [guestId], references: [id])
+
+  @@map("private_rooms")
+}
+
+// ── Dice Royale / Dice Arena (per-stake real-player rounds) ──────────────────
+
+model DiceRound {
+  id                 String    @id @default(uuid())
+  gameType           String    @map("game_type")   // dice_royale|dice_arena
+  stake              Float
+  roundNumber        Int       @map("round_number")
+  status             String    @default("open")    // open|countdown|locked|rolling|result|completed|cancelled
+  maxPlayers         Int       @map("max_players") // 6
+  minPlayersToStart  Int       @map("min_players_to_start") // 2 for Royale, 3 for Arena
+  playerIds          String    @default("[]") @map("player_ids") // JSON array of userIds
+  resultData         String?   @map("result_data") // JSON: {rolls: {userId: roll}, winner1Id, winner2Id?}
+  countdownStartedAt DateTime? @map("countdown_started_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  settledAt          DateTime? @map("settled_at")
+  // Phase 11 — Provably Fair
+  serverSeed         String?   @map("server_seed")
+  serverSeedHash     String?   @map("server_seed_hash")
+  clientSeed         String?   @map("client_seed")
+  nonce              Int?
+  // Phase 19 — Verification ID (BZM-DR-XXXXXXXX or BZM-DA-XXXXXXXX)
+  verificationId     String?   @unique @map("verification_id")
+
+  @@index([gameType, stake, status])
+  @@map("dice_rounds")
+}
+
+// ── Login Attempt Tracking — persistent brute-force protection ────────────────
+// Replaces the in-memory Map in authAttempts.ts.
+// Keyed by email (lowercase). One row per email; upserted on every attempt.
+// lockedUntil is null when the account is not locked.
+
+model LoginAttempt {
+  email        String    @id                   // lowercase email — natural key
+  failCount    Int       @default(0) @map("fail_count")
+  windowStart  DateTime  @map("window_start")  // start of current 5-min sliding window
+  lockedUntil  DateTime? @map("locked_until")  // null = not locked
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  @@map("login_attempts")
+}
+
+// ── Email Verification ────────────────────────────────────────────────────────
+
+model EmailVerificationToken {
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  tokenHash String    @unique @map("token_hash")  // SHA-256 of the raw token
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@map("email_verification_tokens")
+}
+
+// ── Password Reset ────────────────────────────────────────────────────────────
+
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  tokenHash String    @unique @map("token_hash")  // SHA-256 of the raw token
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+// ── Notifications ─────────────────────────────────────────────────────────────
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  type      String
+  title     String
+  message   String
+  read      Boolean  @default(false)
+  metadata  String?  // JSON stored as text in SQLite
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation("UserNotifications", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, read])
+  @@map("notifications")
+}
+
+// ── Audit Log ─────────────────────────────────────────────────────────────────
+
+model AuditLog {
+  id            String   @id @default(uuid())
+  actorId       String?  @map("actor_id")
+  action        String
+  targetType    String?  @map("target_type")
+  targetId      String?  @map("target_id")
+  ipAddress     String?  @map("ip_address")
+  userAgent     String?  @map("user_agent")
+  metadata      String?  // JSON: sanitised request body summary (sensitive fields redacted)
+  previousValue String?  @map("previous_value")  // JSON: state before mutation
+  newValue      String?  @map("new_value")        // JSON: state after mutation
+  httpStatus    Int?     @map("http_status")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  actor User? @relation("AuditActor", fields: [actorId], references: [id])
+
+  @@index([actorId])
+  @@index([targetType, targetId])
+  @@index([createdAt])
+  @@map("audit_log")
+}
+
+// ── Security Events — abnormal activity, violations, alerts ──────────────────
+
+model SecurityEvent {
+  id          String    @id @default(uuid())
+  type        String    // login_failure_spike | suspicious_ip | rate_limit_hit | permission_violation | account_locked | fraud_pattern | etc.
+  severity    String    // info | low | medium | high | critical
+  actorId     String?   @map("actor_id")
+  targetId    String?   @map("target_id")
+  targetType  String?   @map("target_type")
+  ipAddress   String?   @map("ip_address")
+  userAgent   String?   @map("user_agent")
+  description String
+  metadata    String?   // JSON evidence
+  resolved    Boolean   @default(false)
+  resolvedAt  DateTime? @map("resolved_at")
+  resolvedBy  String?   @map("resolved_by")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  @@index([type])
+  @@index([severity])
+  @@index([ipAddress])
+  @@index([actorId])
+  @@index([createdAt])
+  @@map("security_events")
+}
+
+// ── Login History — full login tracking (success + failure) ──────────────────
+
+model LoginHistory {
+  id            String   @id @default(uuid())
+  userId        String?  @map("user_id")   // null for failed attempts with unknown user
+  email         String   // always recorded
+  success       Boolean
+  ipAddress     String?  @map("ip_address")
+  userAgent     String?  @map("user_agent")
+  deviceType    String?  @map("device_type")
+  browser       String?
+  os            String?
+  failureReason String?  @map("failure_reason")
+  sessionId     String?  @map("session_id")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@index([email])
+  @@index([ipAddress])
+  @@index([success])
+  @@index([createdAt])
+  @@map("login_history")
+}
+
+// ── IP Controls — allow/block list ───────────────────────────────────────────
+
+model IpBlock {
+  id        String    @id @default(uuid())
+  ipAddress String    @unique @map("ip_address")
+  type      String    // allow | block | temp_block
+  reason    String?
+  expiresAt DateTime? @map("expires_at")
+  createdBy String    @map("created_by")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+
+  @@index([type])
+  @@map("ip_blocks")
+}
+
+// ── Fraud Alerts — pattern-based fraud detection results ─────────────────────
+
+model FraudAlert {
+  id          String    @id @default(uuid())
+  userId      String?   @map("user_id")
+  severity    String    // low | medium | high | critical
+  type        String    // repeated_login_failures | multiple_accounts | rapid_wallet | suspicious_withdrawal | abnormal_game_activity | etc.
+  description String
+  metadata    String?   // JSON evidence
+  status      String    @default("open") // open | under_review | resolved | dismissed
+  resolvedAt  DateTime? @map("resolved_at")
+  resolvedBy  String?   @map("resolved_by")
+  resolution  String?
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  @@index([userId])
+  @@index([severity])
+  @@index([status])
+  @@index([type])
+  @@map("fraud_alerts")
+}
+
+// ── Platform system configuration — key/value store for admin-controlled settings ──
+// Keys use dot-notation namespaces: "feature.bank_deposits", "maintenance.enabled", etc.
+// Values are JSON strings to support any type (string, boolean, number, object).
+
+model SystemConfig {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  value       String   // JSON-serialised value
+  description String?  // Human-readable label shown in admin UI
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  updatedBy   String?  @map("updated_by") // userId of admin who last changed this
+
+  @@map("system_config")
+}
+
+// ── Content library — FAQs, Help articles, Blog posts, Announcements ───────────
+// Body is stored as Markdown. Admins publish/unpublish; users see published only.
+
+model ContentPost {
+  id          String    @id @default(uuid())
+  slug        String    @unique
+  category    String    // "faq" | "help" | "blog" | "announcement"
+  title       String
+  body        String    // Markdown
+  excerpt     String?
+  status      String    @default("draft") // "draft" | "published"
+  publishedAt DateTime? @map("published_at")
+  createdBy   String    @map("created_by")
+  updatedBy   String?   @map("updated_by")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  @@index([category, status])
+  @@index([status, publishedAt])
+  @@map("content_posts")
+}
+
+// ── Static platform pages — About, FAQ, Privacy Policy, Terms, etc. ──────────
+// Each page has a unique slug. isSystem=true prevents deletion (core legal pages).
+
+model StaticPage {
+  id        String   @id @default(uuid())
+  slug      String   @unique
+  title     String
+  body      String   // Markdown
+  status    String   @default("draft") // "draft" | "published"
+  isSystem  Boolean  @default(false)   @map("is_system")
+  sortOrder Int      @default(0)       @map("sort_order")
+  createdBy String   @map("created_by")
+  updatedBy String?  @map("updated_by")
+  createdAt DateTime @default(now())   @map("created_at")
+  updatedAt DateTime @updatedAt        @map("updated_at")
+
+  @@index([status])
+  @@map("static_pages")
+}
+
+// ── Phase 16 — Football AI Hub ────────────────────────────────────────────────
+
+model FootballLeague {
+  id         String   @id @default(uuid())
+  name       String
+  country    String
+  logoUrl    String?  @map("logo_url")
+  isActive   Boolean  @default(true) @map("is_active")
+  sortOrder  Int      @default(0)    @map("sort_order")
+  externalId String?  @map("external_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt      @map("updated_at")
+
+  matches          FootballMatch[]
+  providerMappings ProviderLeagueMapping[]
+
+  @@map("football_leagues")
+}
+
+model FootballMatch {
+  id         String    @id @default(uuid())
+  leagueId   String    @map("league_id")
+  homeTeam   String    @map("home_team")
+  awayTeam   String    @map("away_team")
+  kickoffAt  DateTime  @map("kickoff_at")
+  status     String    @default("upcoming") // upcoming | live | finished | postponed | cancelled
+  venue      String?
+  homeScore  Int?      @map("home_score")
+  awayScore  Int?      @map("away_score")
+  externalId String?   @map("external_id")
+  syncedFrom String?   @map("synced_from")
+  createdBy  String    @map("created_by")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt      @map("updated_at")
+
+  league      FootballLeague       @relation(fields: [leagueId], references: [id])
+  predictions FootballPrediction[]
+  aiAnalysis  AIMatchAnalysis?
+  queueItems  AIPredictionQueue[]
+
+  @@index([leagueId])
+  @@index([status])
+  @@index([kickoffAt])
+  @@index([externalId])
+  @@map("football_matches")
+}
+
+model FootballPrediction {
+  id          String    @id @default(uuid())
+  matchId     String    @map("match_id")
+  market      String    // 1X2 | over_under | btts | double_chance | etc.
+  prediction  String    // home | draw | away | over | under | yes | no | etc.
+  confidence  Int       // 1-100
+  riskLevel   String    @default("medium") @map("risk_level") // low | medium | high
+  isVip       Boolean   @default(false) @map("is_vip")
+  analysis    String?   // markdown analysis text
+  reasoning   String?   // short reasoning (visible to free users as teaser)
+  publishedAt DateTime? @map("published_at")
+  status      String    @default("draft") // draft | ai_review | rejected | published | settled
+  aiGenerated Boolean   @default(false)   @map("ai_generated")
+  createdBy   String    @map("created_by")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt      @map("updated_at")
+
+  match  FootballMatch         @relation(fields: [matchId], references: [id])
+  result PredictionResult?
+  views  UserPredictionView[]
+
+  @@index([matchId])
+  @@index([status])
+  @@index([isVip])
+  @@index([publishedAt])
+  @@map("football_predictions")
+}
+
+model PredictionResult {
+  id            String   @id @default(uuid())
+  predictionId  String   @unique @map("prediction_id")
+  outcome       String   // win | loss | void
+  isCorrect     Boolean  @map("is_correct")
+  settledAt     DateTime @default(now()) @map("settled_at")
+  settledBy     String   @map("settled_by")
+
+  prediction FootballPrediction @relation(fields: [predictionId], references: [id])
+
+  @@map("prediction_results")
+}
+
+model UserPredictionView {
+  id           String   @id @default(uuid())
+  userId       String   @map("user_id")
+  predictionId String   @map("prediction_id")
+  viewedAt     DateTime @default(now()) @map("viewed_at")
+
+  prediction FootballPrediction @relation(fields: [predictionId], references: [id])
+
+  @@unique([userId, predictionId])
+  @@index([userId])
+  @@map("user_prediction_views")
+}
+
+// ── Phase 17.1 — Football AI Intelligence Foundation ─────────────────────────
+
+// Singleton configuration row for the AI engine.
+// Created on first access with defaults; updated via admin panel.
+model AIEngineConfig {
+  id             String   @id @default(uuid())
+  isEnabled      Boolean  @default(false)         @map("is_enabled")
+  modelVersion   String   @default("1.0.0")       @map("model_version")
+  // JSON: {homeForm, awayForm, h2h, leagueStrength, venueAdvantage}
+  featureWeights String   @default("{}")           @map("feature_weights")
+  minConfidence  Int      @default(60)             @map("min_confidence")
+  highConfidence Int      @default(80)             @map("high_confidence")
+  maxQueueSize   Int      @default(100)            @map("max_queue_size")
+  analysisTimeoutMs Int   @default(30000)          @map("analysis_timeout_ms")
+  updatedAt      DateTime @updatedAt               @map("updated_at")
+  updatedBy      String?                           @map("updated_by")
+
+  @@map("ai_engine_configs")
+}
+
+// Live engine state — one mutable row, reset on startup.
+model AIEngineStatus {
+  id            String    @id @default(uuid())
+  status        String    @default("idle")          // idle | running | error | paused
+  health        String    @default("unknown")        // healthy | degraded | unhealthy | unknown
+  lastRunAt     DateTime?                            @map("last_run_at")
+  lastErrorAt   DateTime?                            @map("last_error_at")
+  lastError     String?                              @map("last_error")
+  analysisCount Int       @default(0)                @map("analysis_count")
+  queueDepth    Int       @default(0)                @map("queue_depth")
+  version       String    @default("1.0.0")
+  createdAt     DateTime  @default(now())            @map("created_at")
+  updatedAt     DateTime  @updatedAt                 @map("updated_at")
+
+  @@map("ai_engine_status")
+}
+
+// Immutable version history — each deploy creates a row; one row is active.
+model AIModelVersion {
+  id         String    @id @default(uuid())
+  version    String    @unique
+  changelog  String?
+  isActive   Boolean   @default(false)  @map("is_active")
+  deployedAt DateTime?                  @map("deployed_at")
+  createdAt  DateTime  @default(now())  @map("created_at")
+  createdBy  String?                    @map("created_by")
+
+  @@map("ai_model_versions")
+}
+
+// AI analysis output for a specific match.
+// status: pending → analyzing → completed | failed
+model AIMatchAnalysis {
+  id      String        @id @default(uuid())
+  matchId String        @unique @map("match_id")
+  match   FootballMatch @relation(fields: [matchId], references: [id], onDelete: Cascade)
+
+  status String @default("pending") // pending | analyzing | completed | failed
+
+  // JSON: {homeForm:[W,W,L], awayForm:[L,D,W], h2hWins:2, h2hDraws:1, ...}
+  features        String? // extracted feature set
+  // JSON: {overall:72, markets:{home:72, draw:18, away:10}}
+  confidenceData  String? @map("confidence_data")
+
+  reasoning  String? // short reasoning visible to free users
+  analysis   String? // full markdown analysis (VIP)
+
+  // Suggested prediction (admin can accept/edit before publishing)
+  suggestedMarket      String?  @map("suggested_market")
+  suggestedPrediction  String?  @map("suggested_prediction")
+  suggestedConfidence  Int?     @map("suggested_confidence")
+  suggestedRiskLevel   String?  @map("suggested_risk_level")
+  suggestedIsVip       Boolean  @default(false) @map("suggested_is_vip")
+
+  modelVersion  String? @map("model_version")
+  processingMs  Int?    @map("processing_ms")
+  error         String?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt      @map("updated_at")
+
+  @@map("ai_match_analyses")
+}
+
+// Queue of matches awaiting AI analysis.
+// status: queued → processing → completed | failed | skipped
+model AIPredictionQueue {
+  id          String        @id @default(uuid())
+  matchId     String        @map("match_id")
+  match       FootballMatch @relation(fields: [matchId], references: [id], onDelete: Cascade)
+
+  priority    Int    @default(5)       // 1-10, higher = more urgent
+  status      String @default("queued") // queued | processing | completed | failed | skipped
+  attempts    Int    @default(0)
+  maxAttempts Int    @default(3)       @map("max_attempts")
+
+  scheduledAt DateTime  @default(now()) @map("scheduled_at")
+  startedAt   DateTime?                 @map("started_at")
+  completedAt DateTime?                 @map("completed_at")
+  failedAt    DateTime?                 @map("failed_at")
+  error       String?
+
+  queuedBy  String?  @map("queued_by")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt      @map("updated_at")
+
+  @@index([status])
+  @@index([scheduledAt])
+  @@map("ai_prediction_queues")
+}
+
+// ── Phase 18.1 — External Provider Architecture ───────────────────────────────
+
+// Data provider configuration — supports football-data.org, api-football.com, etc.
+model DataProvider {
+  id           String    @id @default(uuid())
+  name         String    @unique
+  type         String    // "football-data" | "api-football" | "sportsmonks" | "custom"
+  baseUrl      String    @map("base_url")
+  apiKey       String?   @map("api_key")
+  priority     Int       @default(5)         // 1=highest priority, 10=lowest
+  isEnabled    Boolean   @default(false)     @map("is_enabled")
+  isDefault    Boolean   @default(false)     @map("is_default")
+  healthStatus String    @default("unknown") @map("health_status") // healthy|degraded|unhealthy|unknown
+  lastCheckedAt DateTime? @map("last_checked_at")
+  lastSyncAt   DateTime? @map("last_sync_at")
+  lastError    String?   @map("last_error")
+  avgLatencyMs Int       @default(0)         @map("avg_latency_ms")
+  dailyQuota   Int       @default(0)         @map("daily_quota")    // 0 = unlimited
+  quotaUsed    Int       @default(0)         @map("quota_used")
+  quotaResetAt DateTime? @map("quota_reset_at")
+  rateLimit    Int       @default(60)        @map("rate_limit")     // requests/minute
+  config       String    @default("{}")      // JSON: provider-specific extra settings
+  createdAt    DateTime  @default(now())     @map("created_at")
+  updatedAt    DateTime  @updatedAt          @map("updated_at")
+
+  syncLogs       ProviderSyncLog[]
+  leagueMappings ProviderLeagueMapping[]
+
+  @@map("data_providers")
+}
+
+// Log of each sync run (leagues / fixtures / scores / results)
+model ProviderSyncLog {
+  id             String    @id @default(uuid())
+  providerId     String    @map("provider_id")
+  syncType       String    @map("sync_type")   // leagues | fixtures | scores | results
+  status         String                         // running | completed | failed
+  recordsIn      Int       @default(0)         @map("records_in")
+  recordsNew     Int       @default(0)         @map("records_new")
+  recordsUpdated Int       @default(0)         @map("records_updated")
+  durationMs     Int       @default(0)         @map("duration_ms")
+  error          String?
+  startedAt      DateTime  @default(now())     @map("started_at")
+  completedAt    DateTime?                     @map("completed_at")
+
+  provider DataProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@index([providerId, startedAt])
+  @@map("provider_sync_logs")
+}
+
+// Maps a provider's internal league ID to our FootballLeague row
+model ProviderLeagueMapping {
+  id           String   @id @default(uuid())
+  providerId   String   @map("provider_id")
+  leagueId     String   @map("league_id")
+  externalId   String   @map("external_id")   // provider's league identifier
+  externalName String   @map("external_name")
+  isActive     Boolean  @default(true)        @map("is_active")
+  createdAt    DateTime @default(now())       @map("created_at")
+
+  provider DataProvider  @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  league   FootballLeague @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, externalId])
+  @@map("provider_league_mappings")
+}
+
+// Singleton publishing config — controls auto-publish behaviour
+model AIPublishConfig {
+  id                     String   @id @default("singleton")
+  autoPublish            Boolean  @default(false)    @map("auto_publish")
+  autoPublishMode        String   @default("manual")  @map("auto_publish_mode") // manual|immediate|hours_before
+  hoursBeforeKickoff     Int      @default(3)         @map("hours_before_kickoff")
+  minConfidenceToPublish Int      @default(70)        @map("min_confidence_to_publish")
+  publishVipOnly         Boolean  @default(false)     @map("publish_vip_only")
+  requireAdminApproval   Boolean  @default(true)      @map("require_admin_approval")
+  autoQueueNewMatches    Boolean  @default(false)     @map("auto_queue_new_matches")
+  queueHoursAhead        Int      @default(48)        @map("queue_hours_ahead")
+  updatedAt              DateTime @updatedAt          @map("updated_at")
+  updatedBy              String?                     @map("updated_by")
+
+  @@map("ai_publish_config")
+}
+
+// Drift detection alerts — auto-created when accuracy/confidence degrades
+model AIDriftAlert {
+  id            String    @id @default(uuid())
+  alertType     String    @map("alert_type")   // accuracy_drop|confidence_drift|league_drift|market_drift
+  severity      String                          // low|medium|high|critical
+  title         String
+  description   String
+  metric        String?
+  threshold     Float?
+  currentValue  Float?    @map("current_value")
+  baselineValue Float?    @map("baseline_value")
+  leagueId      String?   @map("league_id")
+  market        String?
+  isRead        Boolean   @default(false)      @map("is_read")
+  isResolved    Boolean   @default(false)      @map("is_resolved")
+  createdAt     DateTime  @default(now())      @map("created_at")
+  resolvedAt    DateTime?                      @map("resolved_at")
+
+  @@index([isResolved, createdAt])
+  @@map("ai_drift_alerts")
+}
+
+// Per-league and per-market optimised feature weights
+// id format: "global" | "<leagueId>" | "global:<market>" | "<leagueId>:<market>"
+model AILeagueWeights {
+  id         String   @id
+  leagueId   String?  @map("league_id")
+  market     String?
+  weights    String   @default("{}") // JSON optimised feature weights
+  sampleSize Int      @default(0)    @map("sample_size")
+  accuracy   Float    @default(0)
+  updatedAt  DateTime @updatedAt     @map("updated_at")
+
+  @@map("ai_league_weights")
+}
+
+// Monitoring event log — records worker/scheduler/provider activity
+model AIMonitoringLog {
+  id         String   @id @default(uuid())
+  component  String                          // worker|sync|publish|learning|drift|scheduler
+  event      String                          // started|completed|failed|skipped
+  details    String   @default("{}")         // JSON
+  durationMs Int      @default(0)           @map("duration_ms")
+  createdAt  DateTime @default(now())       @map("created_at")
+
+  @@index([component, createdAt])
+  @@map("ai_monitoring_logs")
+}
+
+// Monthly learning metrics — how well the AI performed in each period.
+model AILearningMetrics {
+  id                 String   @id @default(uuid())
+  period             String   @unique // "2025-01" (YYYY-MM)
+  totalPredictions   Int      @default(0) @map("total_predictions")
+  correctPredictions Int      @default(0) @map("correct_predictions")
+  accuracy           Float    @default(0)
+  avgConfidence      Float    @default(0) @map("avg_confidence")
+  // JSON: {home:{total,correct}, draw:{...}, away:{...}, over:{...}, ...}
+  marketBreakdown    String?  @map("market_breakdown")
+  // JSON: [{bucket:"60-70",predictions:10,correct:6,accuracy:0.6}, ...]
+  calibrationData    String?  @map("calibration_data")
+
+  computedAt DateTime @default(now()) @map("computed_at")
+
+  @@map("ai_learning_metrics")
+}
+
+// ── Phase 20 — Ambassador Program ────────────────────────────────────────────
+
+model AmbassadorApplication {
+  id              String    @id @default(uuid())
+  userId          String    @unique @map("user_id")
+  status          String    @default("pending")  // pending|approved|rejected
+  username        String                          // requested @handle
+  bio             String?
+  socialLinks     String    @default("[]") @map("social_links")  // JSON array
+  rejectionReason String?   @map("rejection_reason")
+  reviewedBy      String?   @map("reviewed_by")
+  reviewedAt      DateTime? @map("reviewed_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("ambassador_applications")
+}
+
+model AmbassadorActivityScore {
+  userId         String   @id @map("user_id")
+  gameScore      Float    @default(0) @map("game_score")      // 25% weight
+  depositScore   Float    @default(0) @map("deposit_score")   // 20% weight
+  vipScore       Float    @default(0) @map("vip_score")       // 20% weight
+  taskScore      Float    @default(0) @map("task_score")      // 15% weight
+  footballScore  Float    @default(0) @map("football_score")  // 5% weight
+  otherScore     Float    @default(0) @map("other_score")     // 15% weight
+  compositeScore Float    @default(0) @map("composite_score") // weighted total
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("ambassador_activity_scores")
+}
+
+model AmbassadorRewardPool {
+  id            String    @id @default(uuid())
+  period        String    @unique               // "2025-01" (YYYY-MM)
+  totalPool     Float     @map("total_pool")
+  status        String    @default("pending")   // pending|distributed
+  distributedAt DateTime? @map("distributed_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  distributions AmbassadorPoolDistribution[]
+
+  @@map("ambassador_reward_pools")
+}
+
+model AmbassadorPoolDistribution {
+  id        String   @id @default(uuid())
+  poolId    String   @map("pool_id")
+  userId    String   @map("user_id")
+  share     Float
+  createdAt DateTime @default(now()) @map("created_at")
+
+  pool AmbassadorRewardPool @relation(fields: [poolId], references: [id], onDelete: Cascade)
+  user User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([poolId, userId])
+  @@map("ambassador_pool_distributions")
+}
+
+// ── Phase 20 — Monthly Referral Challenge ─────────────────────────────────────
+
+model ReferralChallenge {
+  id             String   @id @default(uuid())
+  title          String
+  description    String?
+  period         String   @unique               // "2025-01" (YYYY-MM)
+  startAt        DateTime @map("start_at")
+  endAt          DateTime @map("end_at")
+  status         String   @default("upcoming")  // upcoming|active|ended|cancelled
+  // Three separate cash pools — each distributed among top-N of that program level
+  referralPool   Float    @default(200) @map("referral_pool")    // USD — shared among top N referral-level users
+  referralTopN   Int      @default(50)  @map("referral_top_n")   // how many referral users share the pool
+  affiliatePool  Float    @default(350) @map("affiliate_pool")   // USD — shared among top N affiliate-level users
+  affiliateTopN  Int      @default(10)  @map("affiliate_top_n")
+  ambassadorPool Float    @default(400) @map("ambassador_pool")  // USD — shared among top N ambassador-level users
+  ambassadorTopN Int      @default(3)   @map("ambassador_top_n")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  entries ChallengeEntry[]
+  rewards ChallengeReward[]
+  vipGrants VipGrant[]
+
+  @@map("referral_challenges")
+}
+
+model ChallengeEntry {
+  id          String   @id @default(uuid())
+  challengeId String   @map("challenge_id")
+  referrerId  String   @map("referrer_id")
+  referredId  String   @map("referred_id")
+  qualifiedAt DateTime @default(now()) @map("qualified_at")
+
+  challenge ReferralChallenge @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+  referrer  User              @relation("ChallengeReferrer", fields: [referrerId], references: [id])
+  referred  User              @relation("ChallengeReferred", fields: [referredId], references: [id])
+
+  @@unique([challengeId, referredId])
+  @@index([challengeId, referrerId])
+  @@map("challenge_entries")
+}
+
+model ChallengeReward {
+  id          String    @id @default(uuid())
+  challengeId String    @map("challenge_id")
+  userId      String    @map("user_id")
+  level       String                          // referral|affiliate|ambassador
+  rank        Int                             // rank within that level's pool
+  amount      Float
+  paid        Boolean   @default(false)
+  paidAt      DateTime? @map("paid_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  challenge ReferralChallenge @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+  user      User              @relation(fields: [userId], references: [id])
+
+  @@unique([challengeId, level, rank])
+  @@index([challengeId, level])
+  @@map("challenge_rewards")
+}
+
+// ── Phase 20 — Football AI Daily Points ──────────────────────────────────────
+
+model FootballHubDailyClaim {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  claimDate String   @map("claim_date")  // ISO date "2025-01-15"
+  points    Int      @default(25)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, claimDate])
+  @@index([userId])
+  @@map("football_hub_daily_claims")
+}
+
+model FootballPointsBalance {
+  userId         String   @id @map("user_id")
+  totalPoints    Int      @default(0) @map("total_points")
+  currentPoints  Int      @default(0) @map("current_points")
+  totalConverted Int      @default(0) @map("total_converted")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("football_points_balances")
+}
+
+// ── Phase 20 — VIP Grant (admin-issued, no payment, no commission) ────────────
+
+model VipGrant {
+  id           String    @id @default(uuid())
+  userId       String    @map("user_id")
+  grantedBy    String    @map("granted_by")    // admin userId
+  durationDays Int       @map("duration_days")
+  reason       String?
+  challengeId  String?   @map("challenge_id")  // set when issued as challenge prize
+  createdAt    DateTime  @default(now()) @map("created_at")
+  appliedUntil DateTime  @map("applied_until") // the new subscription endsAt
+
+  user      User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  challenge ReferralChallenge? @relation(fields: [challengeId], references: [id])
+
+  @@index([userId])
+  @@map("vip_grants")
+}
+
+// ── Phase 21 — Featured Promotion & Platform Announcement System ──────────────
+
+model Promotion {
+  id          String    @id @default(uuid())
+  type        String    // "platform" | "featured_task"
+  title       String
+  description String?
+  ctaLabel    String?   @map("cta_label")
+  ctaUrl      String?   @map("cta_url")
+  imageUrl    String?   @map("image_url")
+  badgeLabel  String?   @map("badge_label")
+  badgeColor  String?   @map("badge_color")
+  accentColor String?   @map("accent_color")
+  status      String    @default("draft") // draft|active|scheduled|paused|expired|cancelled
+  priority    Int       @default(0)
+  taskId      String?   @map("task_id")
+  createdBy   String    @map("created_by")
+  startsAt    DateTime? @map("starts_at")
+  endsAt      DateTime? @map("ends_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  placements      PromotionPlacement[]
+  schedule        PromotionSchedule?
+  featuredRequest FeaturedRequest?
+  eventLinks      PromotionEventLink[]
+  statusHistory   PromotionStatusHistory[]
+
+  @@index([status, priority])
+  @@index([createdBy])
+  @@map("promotions")
+}
+
+model PromotionPlacement {
+  id          String  @id @default(uuid())
+  promotionId String  @map("promotion_id")
+  location    String  // wallet|marketplace|referral|affiliate|ambassador
+  isActive    Boolean @default(true) @map("is_active")
+
+  promotion Promotion @relation(fields: [promotionId], references: [id], onDelete: Cascade)
+
+  @@unique([promotionId, location])
+  @@index([location, isActive])
+  @@map("promotion_placements")
+}
+
+model PromotionSchedule {
+  id           String   @id @default(uuid())
+  promotionId  String   @unique @map("promotion_id")
+  startsAt     DateTime @map("starts_at")
+  endsAt       DateTime @map("ends_at")
+  timeZone     String   @default("UTC") @map("time_zone")
+  autoActivate Boolean  @default(true)  @map("auto_activate")
+  autoExpire   Boolean  @default(true)  @map("auto_expire")
+
+  promotion Promotion @relation(fields: [promotionId], references: [id], onDelete: Cascade)
+
+  @@map("promotion_schedules")
+}
+
+model FeaturedRequest {
+  id              String    @id @default(uuid())
+  promotionId     String    @unique @map("promotion_id")
+  userId          String    @map("user_id")
+  taskId          String    @map("task_id")
+  durationDays    Int       @map("duration_days")
+  amount          Float
+  status          String    @default("pending_marketplace") // pending_marketplace|pending_featured|approved|rejected|expired|refunded
+  refundedAt      DateTime? @map("refunded_at")
+  reviewedBy      String?   @map("reviewed_by")
+  reviewedAt      DateTime? @map("reviewed_at")
+  rejectionReason String?   @map("rejection_reason")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  promotion Promotion       @relation(fields: [promotionId], references: [id], onDelete: Cascade)
+  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  revenue   FeaturedRevenue?
+
+  @@index([userId])
+  @@index([taskId])
+  @@index([status])
+  @@map("featured_requests")
+}
+
+model FeaturedPricing {
+  id           String   @id @default(uuid())
+  durationDays Int      @unique @map("duration_days")
+  price        Float
+  isActive     Boolean  @default(true) @map("is_active")
+  updatedBy    String?  @map("updated_by")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@map("featured_pricing")
+}
+
+model FeaturedRevenue {
+  id            String    @id @default(uuid())
+  featuredReqId String    @unique @map("featured_req_id")
+  userId        String    @map("user_id")
+  amount        Float
+  durationDays  Int       @map("duration_days")
+  refunded      Boolean   @default(false)
+  refundedAt    DateTime? @map("refunded_at")
+  refundedBy    String?   @map("refunded_by")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  featuredRequest FeaturedRequest @relation(fields: [featuredReqId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("featured_revenue")
+}
+
+model PromotionEventLink {
+  id          String   @id @default(uuid())
+  promotionId String   @map("promotion_id")
+  eventType   String   @map("event_type")
+  eventId     String?  @map("event_id")
+  metadata    String?
+  createdBy   String   @map("created_by")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  promotion Promotion @relation(fields: [promotionId], references: [id], onDelete: Cascade)
+
+  @@unique([promotionId, eventType, eventId])
+  @@map("promotion_event_links")
+}
+
+model PromotionStatusHistory {
+  id          String   @id @default(uuid())
+  promotionId String   @map("promotion_id")
+  fromStatus  String?  @map("from_status")
+  toStatus    String   @map("to_status")
+  changedBy   String   @map("changed_by")
+  reason      String?
+  metadata    String?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  promotion Promotion @relation(fields: [promotionId], references: [id], onDelete: Cascade)
+
+  @@index([promotionId])
+  @@map("promotion_status_history")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 22 — Auction Marketplace
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Core auction entity.
+/// Two-timer design:
+///   Timer 1 → startsAt: countdown until auction goes LIVE (upcoming → live)
+///   Timer 2 → endsAt:   auction duration, set when launched (live → ended)
+/// Fixed bid: every participant pays exactly bidAmount — no higher, no lower.
+/// Current leader = most recent valid bidder (Phase 22.3 updates this).
+model Auction {
+  id                       String    @id @default(uuid())
+  title                    String
+  description              String?
+  /// "cash_reward" | "vip_subscription" | "gift_card" | "software" | "future_item"
+  rewardType               String    @map("reward_type")
+  /// Custom label for "future_item" type; also used as display override for all types
+  rewardName               String?   @map("reward_name")
+  /// Approximate USD display value of the reward
+  rewardValue              Float     @map("reward_value")
+  /// Base64 data URL — same storage pattern as task campaign images
+  rewardImageUrl           String?   @map("reward_image_url")
+  /// Fixed bid amount — every bid is EXACTLY this amount, no exceptions
+  bidAmount                Float     @map("bid_amount")
+  /// How many minutes the auction runs once live (used to compute endsAt)
+  durationMinutes          Int       @map("duration_minutes")
+  /// If remaining time ≤ this many seconds and a bid arrives → extension triggers
+  extensionWindowSeconds   Int       @default(60)  @map("extension_window_seconds")
+  /// When extension triggers, remaining time resets to this many seconds (default 10 min)
+  extensionDurationSeconds Int       @default(600) @map("extension_duration_seconds")
+  /// FIRST TIMER target: when the auction goes LIVE from upcoming state
+  startsAt                 DateTime  @map("starts_at")
+  /// SECOND TIMER target: computed when launched = launch_time + durationMinutes
+  endsAt                   DateTime? @map("ends_at")
+  /// "draft" | "upcoming" | "live" | "paused" | "ended" | "cancelled"
+  status                   String    @default("draft")
+  /// "private" (admin only) | "public" (visible to all users)
+  visibility               String    @default("private")
+  /// userId of the current leader — masked on frontend (Phase 22.3 updates)
+  currentLeaderId          String?   @map("current_leader_id")
+  /// Accumulated pool — incremented per bid in Phase 22.3
+  currentPool              Float     @default(0) @map("current_pool")
+  /// Total bid count — incremented per bid in Phase 22.3
+  bidCount                 Int       @default(0) @map("bid_count")
+  /// Unique participant count — incremented per new participant in Phase 22.3
+  participantCount         Int       @default(0) @map("participant_count")
+  /// How many times the last-minute extension has fired
+  extensionCount           Int       @default(0) @map("extension_count")
+  lastExtendedAt           DateTime? @map("last_extended_at")
+  lastBidAt                DateTime? @map("last_bid_at")
+  createdBy                String    @map("created_by")
+  updatedBy                String?   @map("updated_by")
+  createdAt                DateTime  @default(now()) @map("created_at")
+  updatedAt                DateTime  @updatedAt     @map("updated_at")
+
+  bids          AuctionBid[]
+  statusHistory AuctionStatusHistory[]
+  collection    AuctionCollection?
+
+  @@index([status])
+  @@index([startsAt])
+  @@index([endsAt])
+  @@index([visibility, status])
+  @@map("auctions")
+}
+
+/// Architecture placeholder for Phase 22.3 live bidding engine.
+/// Bid placement, wallet deductions, and pool accumulation are NOT implemented yet.
+model AuctionBid {
+  id        String   @id @default(uuid())
+  auctionId String   @map("auction_id")
+  userId    String   @map("user_id")
+  /// Always equals auction.bidAmount at time of placement
+  amount    Float
+  /// Sequential bid number within this auction (1, 2, 3 …)
+  bidNumber Int      @map("bid_number")
+  /// True only for the most recent bid (current leader); cleared on next bid
+  isLeading Boolean  @default(false) @map("is_leading")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  auction Auction @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+
+  @@index([auctionId])
+  @@index([userId])
+  @@index([auctionId, bidNumber])
+  @@index([auctionId, isLeading])
+  @@map("auction_bids")
+}
+
+/// Full audit trail of every auction status transition.
+model AuctionStatusHistory {
+  id         String   @id @default(uuid())
+  auctionId  String   @map("auction_id")
+  fromStatus String?  @map("from_status")
+  toStatus   String   @map("to_status")
+  changedBy  String   @map("changed_by")
+  reason     String?
+  metadata   String?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  auction Auction @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+
+  @@index([auctionId])
+  @@map("auction_status_history")
+}
+
+/// User reward collection. Populated when an auction winner is determined (Phase 22.3).
+model AuctionCollection {
+  id            String    @id @default(uuid())
+  userId        String    @map("user_id")
+  /// One winner per auction
+  auctionId     String    @unique @map("auction_id")
+  /// "pending_claim" | "claimed" | "expired" | "delivered"
+  status        String    @default("pending_claim")
+  claimedAt     DateTime? @map("claimed_at")
+  /// When the claim window closes (7 days from auction end)
+  expiresAt     DateTime? @map("expires_at")
+  /// Admin-provided delivery info shown after claim (VIP details, gift card code, license key, etc.)
+  deliveryNotes String?   @map("delivery_notes")
+  /// Structured reward data (JSON): gift card code, license key, VIP grant details, etc.
+  rewardData    String?   @map("reward_data")
+  /// Replay protection: number of claim attempts made
+  claimAttempts Int       @default(0) @map("claim_attempts")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt      @map("updated_at")
+
+  auction Auction @relation(fields: [auctionId], references: [id])
+
+  @@index([userId])
+  @@index([status])
+  @@map("auction_collection")
+}
+
+// ── Globalisation — Phase 24.2 ────────────────────────────────────────────────
+
+model Language {
+  code       String   @id
+  name       String
+  nativeName String   @map("native_name")
+  flag       String?
+  direction  String   @default("ltr")
+  isDefault  Boolean  @default(false) @map("is_default")
+  isEnabled  Boolean  @default(true)  @map("is_enabled")
+  sortOrder  Int      @default(0)     @map("sort_order")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt      @map("updated_at")
+  translations Translation[]
+  @@map("languages")
+}
+
+model TranslationKey {
+  id           String   @id @default(cuid())
+  key          String   @unique
+  namespace    String   @default("common")
+  defaultValue String   @map("default_value")
+  description  String?
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt      @map("updated_at")
+  translations Translation[]
+  @@index([namespace])
+  @@map("translation_keys")
+}
+
+model Translation {
+  id              String   @id @default(cuid())
+  languageCode    String   @map("language_code")
+  key             String
+  value           String
+  isAutoTranslated Boolean @default(false) @map("is_auto_translated")
+  isApproved      Boolean  @default(true)  @map("is_approved")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt      @map("updated_at")
+  language        Language       @relation(fields: [languageCode], references: [code], onDelete: Cascade)
+  translationKey  TranslationKey @relation(fields: [key], references: [key], onDelete: Cascade)
+  @@unique([languageCode, key])
+  @@index([languageCode])
+  @@map("translations")
+}
+
+// ── Translation version history (Phase 24.2) ─────────────────────────────────
+model TranslationHistory {
+  id           Int      @id @default(autoincrement())
+  languageCode String   @map("language_code")
+  key          String
+  oldValue     String?  @map("old_value")
+  newValue     String   @map("new_value")
+  changedBy    String?  @map("changed_by")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([languageCode, key])
+  @@map("translation_history")
+}
+
+// ── Currency management (Phase 23.3 / 23.4) ───────────────────────────────────
+model Currency {
+  code       String   @id
+  name       String
+  symbol     String
+  rate       Float    @default(1.0)
+  rateSource String   @default("manual") @map("rate_source")
+  enabled    Boolean  @default(true)
+  sortOrder  Int      @default(0)        @map("sort_order")
+  country    String?  @map("country")
+  flag       String?  @map("flag")
+  isDefault  Boolean  @default(false)    @map("is_default")
+  updatedAt  DateTime @updatedAt         @map("updated_at")
+  updatedBy  String?  @map("updated_by")
+
+  @@map("currencies")
+}
