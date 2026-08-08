@@ -5,3 +5,5 @@ dist/
 uploads/
 *.log
 prisma/dev.db
+prisma/dev.db
+uploads/kyc/
