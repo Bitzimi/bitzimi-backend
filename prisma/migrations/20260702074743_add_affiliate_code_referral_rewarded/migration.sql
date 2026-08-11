@@ -7,7 +7,7 @@ CREATE TABLE "users" (
     "referral_code" TEXT NOT NULL,
     "affiliate_code" TEXT NOT NULL,
     "upline_id" TEXT,
-    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" DATETIME NOT NULL,
     "suspended_at" DATETIME,
     "suspended_by" TEXT,
