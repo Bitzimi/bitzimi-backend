@@ -8,7 +8,7 @@ CREATE TABLE "system_config" (
     "key" TEXT NOT NULL,
     "value" TEXT NOT NULL,
     "description" TEXT,
-    "updated_at" DATETIME NOT NULL,
+    "updated_at" TIMESTAMP NOT NULL,
     "updated_by" TEXT
 );
 
