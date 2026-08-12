@@ -7,9 +7,9 @@ CREATE TABLE "users" (
     "referral_code" TEXT NOT NULL,
     "affiliate_code" TEXT NOT NULL,
     "upline_id" TEXT,
-    "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" DATETIME NOT NULL,
-    "suspended_at" DATETIME,
+    "created_at" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP NOT NULL,
+    "suspended_at" TIMESTAMP,
     "suspended_by" TEXT,
     CONSTRAINT "users_upline_id_fkey" FOREIGN KEY ("upline_id") REFERENCES "users" ("id") ON DELETE SET NULL ON UPDATE CASCADE
 );
@@ -24,7 +24,7 @@ CREATE TABLE "user_profiles" (
     "phone_verified" BOOLEAN NOT NULL DEFAULT false,
     "language_pref" TEXT NOT NULL DEFAULT 'en',
     "currency_pref" TEXT NOT NULL DEFAULT 'USD',
-    "updated_at" DATETIME NOT NULL,
+    "updated_at" TIMESTAMP NOT NULL,
     CONSTRAINT "user_profiles_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
@@ -34,9 +34,9 @@ CREATE TABLE "auth_tokens" (
     "user_id" TEXT NOT NULL,
     "token_hash" TEXT NOT NULL,
     "device_id" TEXT NOT NULL,
-    "expires_at" DATETIME NOT NULL,
-    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "revoked_at" DATETIME,
+    "expires_at" TIMESTAMP NOT NULL,
+    "created_at" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "revoked_at" TIMESTAMP,
     CONSTRAINT "auth_tokens_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
@@ -44,7 +44,7 @@ CREATE TABLE "auth_tokens" (
 CREATE TABLE "security_pins" (
     "user_id" TEXT NOT NULL PRIMARY KEY,
     "pin_hash" TEXT NOT NULL,
-    "updated_at" DATETIME NOT NULL,
+    "updated_at" TIMESTAMP NOT NULL,
     CONSTRAINT "security_pins_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
@@ -69,10 +69,10 @@ CREATE TABLE "kyc_submissions" (
     "face_confidence" REAL,
     "address_match" BOOLEAN,
     "reviewed_by" TEXT,
-    "reviewed_at" DATETIME,
+    "reviewed_at" TIMESTAMP,
     "rejection_reason" TEXT,
-    "submitted_at" DATETIME,
-    "updated_at" DATETIME NOT NULL,
+    "submitted_at" TIMESTAMP,
+    "updated_at" TIMESTAMP NOT NULL,
     CONSTRAINT "kyc_submissions_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
@@ -82,9 +82,9 @@ CREATE TABLE "subscriptions" (
     "plan" TEXT NOT NULL DEFAULT 'monthly',
     "price" REAL NOT NULL,
     "is_active" BOOLEAN NOT NULL DEFAULT true,
-    "started_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "ends_at" DATETIME NOT NULL,
-    "cancelled_at" DATETIME,
+    "started_at" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "ends_at" TIMESTAMP NOT NULL,
+    "cancelled_at" TIMESTAMP,
     "payment_ref" TEXT,
     CONSTRAINT "subscriptions_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
@@ -93,7 +93,7 @@ CREATE TABLE "subscriptions" (
 CREATE TABLE "vip_streaks" (
     "user_id" TEXT NOT NULL PRIMARY KEY,
     "current_streak" INTEGER NOT NULL DEFAULT 0,
-    "last_claim_date" DATETIME,
+    "last_claim_date" TIMESTAMP,
     "total_earned" REAL NOT NULL DEFAULT 0,
     CONSTRAINT "vip_streaks_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
@@ -103,8 +103,8 @@ CREATE TABLE "withdrawal_limits" (
     "user_id" TEXT NOT NULL PRIMARY KEY,
     "daily_used" REAL NOT NULL DEFAULT 0,
     "monthly_used" REAL NOT NULL DEFAULT 0,
-    "last_daily_reset" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "last_monthly_reset" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "last_daily_reset" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "last_monthly_reset" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "withdrawal_limits_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
@@ -115,7 +115,7 @@ CREATE TABLE "wallets" (
     "wallet_type" TEXT NOT NULL,
     "balance" REAL NOT NULL DEFAULT 0,
     "locked_amount" REAL NOT NULL DEFAULT 0,
-    "updated_at" DATETIME NOT NULL,
+    "updated_at" TIMESTAMP NOT NULL,
     CONSTRAINT "wallets_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
@@ -134,7 +134,7 @@ CREATE TABLE "transactions" (
     "status" TEXT NOT NULL DEFAULT 'completed',
     "description" TEXT,
     "metadata" TEXT,
-    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "created_at" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "transactions_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
@@ -149,9 +149,9 @@ CREATE TABLE "deposits" (
     "status" TEXT NOT NULL DEFAULT 'pending',
     "tx_hash" TEXT,
     "confirmed_by" TEXT,
-    "expires_at" DATETIME NOT NULL,
-    "confirmed_at" DATETIME,
-    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "expires_at" TIMESTAMP NOT NULL,
+    "confirmed_at" TIMESTAMP,
+    "created_at" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "deposits_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
@@ -169,8 +169,8 @@ CREATE TABLE "withdrawals" (
     "processed_by" TEXT,
     "rejection_reason" TEXT,
     "tx_hash" TEXT,
-    "submitted_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "processed_at" DATETIME,
+    "submitted_at" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "processed_at" TIMESTAMP,
     CONSTRAINT "withdrawals_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
@@ -193,14 +193,14 @@ CREATE TABLE "tasks" (
     "requirements" TEXT NOT NULL DEFAULT '[]',
     "proof_type" TEXT,
     "proof_instructions" TEXT,
-    "expires_at" DATETIME,
+    "expires_at" TIMESTAMP,
     "approved_by" TEXT,
-    "approved_at" DATETIME,
+    "approved_at" TIMESTAMP,
     "rejected_by" TEXT,
-    "rejected_at" DATETIME,
+    "rejected_at" TIMESTAMP,
     "rejection_reason" TEXT,
-    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" DATETIME NOT NULL,
+    "created_at" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP NOT NULL,
     CONSTRAINT "tasks_advertiser_id_fkey" FOREIGN KEY ("advertiser_id") REFERENCES "users" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
 );
 
@@ -210,7 +210,7 @@ CREATE TABLE "task_reference_screenshots" (
     "task_id" TEXT NOT NULL,
     "storage_key" TEXT NOT NULL,
     "slot" INTEGER NOT NULL DEFAULT 0,
-    "uploaded_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "uploaded_at" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "task_reference_screenshots_task_id_fkey" FOREIGN KEY ("task_id") REFERENCES "tasks" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
@@ -225,8 +225,8 @@ CREATE TABLE "task_proofs" (
     "ai_verdict" TEXT,
     "reward_paid" BOOLEAN NOT NULL DEFAULT false,
     "reward_amount" REAL,
-    "processed_at" DATETIME,
-    "submitted_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "processed_at" TIMESTAMP,
+    "submitted_at" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "task_proofs_task_id_fkey" FOREIGN KEY ("task_id") REFERENCES "tasks" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
     CONSTRAINT "task_proofs_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
@@ -237,7 +237,7 @@ CREATE TABLE "task_proof_screenshots" (
     "proof_id" TEXT NOT NULL,
     "storage_key" TEXT NOT NULL,
     "slot" INTEGER NOT NULL DEFAULT 0,
-    "uploaded_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "uploaded_at" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "task_proof_screenshots_proof_id_fkey" FOREIGN KEY ("proof_id") REFERENCES "task_proofs" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
@@ -252,8 +252,8 @@ CREATE TABLE "admin_proof_reviews" (
     "decision" TEXT,
     "decision_note" TEXT,
     "reviewed_by" TEXT,
-    "reviewed_at" DATETIME,
-    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "reviewed_at" TIMESTAMP,
+    "created_at" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "admin_proof_reviews_proof_id_fkey" FOREIGN KEY ("proof_id") REFERENCES "task_proofs" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
@@ -264,10 +264,10 @@ CREATE TABLE "referrals" (
     "referred_id" TEXT NOT NULL,
     "tier" INTEGER NOT NULL,
     "is_active" BOOLEAN NOT NULL DEFAULT false,
-    "activated_at" DATETIME,
+    "activated_at" TIMESTAMP,
     "referral_rewarded" BOOLEAN NOT NULL DEFAULT false,
-    "rewarded_at" DATETIME,
-    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "rewarded_at" TIMESTAMP,
+    "created_at" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "referrals_referrer_id_fkey" FOREIGN KEY ("referrer_id") REFERENCES "users" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
     CONSTRAINT "referrals_referred_id_fkey" FOREIGN KEY ("referred_id") REFERENCES "users" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
@@ -284,7 +284,7 @@ CREATE TABLE "affiliate_commissions" (
     "rate" REAL NOT NULL,
     "commission" REAL NOT NULL,
     "status" TEXT NOT NULL DEFAULT 'paid',
-    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "created_at" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "affiliate_commissions_beneficiary_id_fkey" FOREIGN KEY ("beneficiary_id") REFERENCES "users" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
@@ -296,8 +296,8 @@ CREATE TABLE "game_rounds" (
     "round_number" INTEGER NOT NULL,
     "status" TEXT NOT NULL DEFAULT 'waiting',
     "result_data" TEXT,
-    "started_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "settled_at" DATETIME
+    "started_at" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "settled_at" TIMESTAMP
 );
 
 -- CreateTable
@@ -311,8 +311,8 @@ CREATE TABLE "game_bets" (
     "payout" REAL,
     "platform_fee" REAL,
     "settled" BOOLEAN NOT NULL DEFAULT false,
-    "placed_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "settled_at" DATETIME,
+    "placed_at" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "settled_at" TIMESTAMP,
     CONSTRAINT "game_bets_round_id_fkey" FOREIGN KEY ("round_id") REFERENCES "game_rounds" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
     CONSTRAINT "game_bets_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
@@ -326,24 +326,10 @@ CREATE TABLE "game_stats" (
     "losses" INTEGER NOT NULL DEFAULT 0,
     "total_wagered" REAL NOT NULL DEFAULT 0,
     "total_won" REAL NOT NULL DEFAULT 0,
-    "updated_at" DATETIME NOT NULL,
+    "updated_at" TIMESTAMP NOT NULL,
 
     PRIMARY KEY ("user_id", "game_type"),
     CONSTRAINT "game_stats_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users" ("id") ON DELETE CASCADE ON UPDATE CASCADE
-);
-
--- CreateTable
-CREATE TABLE "matchmaking_queues" (
-    "id" TEXT NOT NULL PRIMARY KEY,
-    "user_id" TEXT NOT NULL,
-    "game_type" TEXT NOT NULL,
-    "stake" REAL NOT NULL,
-    "status" TEXT NOT NULL DEFAULT 'waiting',
-    "match_id" TEXT,
-    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "expires_at" DATETIME NOT NULL,
-    CONSTRAINT "matchmaking_queues_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
-    CONSTRAINT "matchmaking_queues_match_id_fkey" FOREIGN KEY ("match_id") REFERENCES "pvp_matches" ("id") ON DELETE SET NULL ON UPDATE CASCADE
 );
 
 -- CreateTable
@@ -356,15 +342,29 @@ CREATE TABLE "pvp_matches" (
     "status" TEXT NOT NULL DEFAULT 'active',
     "winner_id" TEXT,
     "result_data" TEXT,
-    "signal_sent_at" DATETIME,
+    "signal_sent_at" TIMESTAMP,
     "player1_tap_ms" INTEGER,
     "player2_tap_ms" INTEGER,
     "player1_ready" BOOLEAN NOT NULL DEFAULT false,
     "player2_ready" BOOLEAN NOT NULL DEFAULT false,
-    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "settled_at" DATETIME,
+    "created_at" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "settled_at" TIMESTAMP,
     CONSTRAINT "pvp_matches_player1_id_fkey" FOREIGN KEY ("player1_id") REFERENCES "users" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
     CONSTRAINT "pvp_matches_player2_id_fkey" FOREIGN KEY ("player2_id") REFERENCES "users" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+);
+
+-- CreateTable
+CREATE TABLE "matchmaking_queues" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "user_id" TEXT NOT NULL,
+    "game_type" TEXT NOT NULL,
+    "stake" REAL NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'waiting',
+    "match_id" TEXT,
+    "created_at" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "expires_at" TIMESTAMP NOT NULL,
+    CONSTRAINT "matchmaking_queues_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT "matchmaking_queues_match_id_fkey" FOREIGN KEY ("match_id") REFERENCES "pvp_matches" ("id") ON DELETE SET NULL ON UPDATE CASCADE
 );
 
 -- CreateTable
@@ -378,9 +378,9 @@ CREATE TABLE "dice_rounds" (
     "min_players_to_start" INTEGER NOT NULL,
     "player_ids" TEXT NOT NULL DEFAULT '[]',
     "result_data" TEXT,
-    "countdown_started_at" DATETIME,
-    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "settled_at" DATETIME
+    "countdown_started_at" TIMESTAMP,
+    "created_at" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "settled_at" TIMESTAMP
 );
 
 -- CreateTable
@@ -392,7 +392,7 @@ CREATE TABLE "notifications" (
     "message" TEXT NOT NULL,
     "read" BOOLEAN NOT NULL DEFAULT false,
     "metadata" TEXT,
-    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "created_at" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "notifications_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
@@ -404,7 +404,7 @@ CREATE TABLE "audit_log" (
     "target_type" TEXT,
     "target_id" TEXT,
     "ip_address" TEXT,
-    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "created_at" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "audit_log_actor_id_fkey" FOREIGN KEY ("actor_id") REFERENCES "users" ("id") ON DELETE SET NULL ON UPDATE CASCADE
 );
 
