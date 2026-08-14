@@ -114,14 +114,165 @@ export async function sendEmailVerificationEmail(
   rawToken: string
 ): Promise<void> {
   const link = `${FRONTEND_URL()}/verify-email?token=${rawToken}`;
-  const html = baseTemplate(`
-    <h2>Verify your email address</h2>
-    <p>Thanks for signing up for BitZimi! Please verify your email address to activate your account.</p>
-    <p>Click the button below. This link expires in <strong>24 hours</strong>.</p>
-    <a href="${link}" class="btn">Verify Email Address</a>
-    <p>Or copy and paste this link into your browser:</p>
-    <div class="token">${link}</div>
-    <p>If you did not create a BitZimi account, you can safely ignore this email.</p>
-  `);
+  const html = `<!DOCTYPE html>
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="x-apple-disable-message-reformatting">
+  <title>Verify your BitZimi email address</title>
+  <!--[if mso]>
+  <xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch><o:AllowPNG/></o:OfficeDocumentSettings></xml>
+  <![endif]-->
+  <style>
+    body, table, td, a { -webkit-text-size-adjust:100%; -ms-text-size-adjust:100%; }
+    table, td { mso-table-lspace:0pt; mso-table-rspace:0pt; }
+    img { -ms-interpolation-mode:bicubic; border:0; }
+    @media only screen and (max-width:620px) {
+      .email-wrapper { padding:24px 12px 32px !important; }
+      .card-body     { padding:32px 24px 28px !important; }
+      .card-footer   { padding:16px 24px 20px !important; }
+      .email-heading { font-size:22px !important; line-height:1.25 !important; }
+      .btn-fallback  { font-size:10px !important; }
+    }
+  </style>
+</head>
+<body style="margin:0;padding:0;background-color:#08091a;-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%;">
+
+<!-- Outer wrapper -->
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#08091a" style="background-color:#08091a;min-width:100%;">
+  <tr>
+    <td align="center" class="email-wrapper" style="padding:48px 16px 40px;">
+
+      <!-- Card container -->
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width:560px;">
+
+        <!-- Top accent bar -->
+        <tr>
+          <td height="3" bgcolor="#6366f1" style="background-color:#6366f1;border-radius:20px 20px 0 0;font-size:0;line-height:0;mso-line-height-rule:exactly;">&nbsp;</td>
+        </tr>
+
+        <!-- Card body -->
+        <tr>
+          <td class="card-body" bgcolor="#0f1023" style="background-color:#0f1023;border-left:1px solid #1c1e42;border-right:1px solid #1c1e42;padding:44px 48px 36px;">
+
+            <!-- Logo -->
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:36px;">
+              <tr>
+                <td style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-size:22px;font-weight:800;letter-spacing:-0.5px;color:#ffffff;mso-line-height-rule:exactly;">
+                  Bit<span style="color:#818cf8;">Zimi</span>
+                </td>
+              </tr>
+            </table>
+
+            <!-- Icon badge -->
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:28px;">
+              <tr>
+                <td width="60" height="60" align="center" valign="middle" bgcolor="#141630" style="background-color:#141630;border-radius:14px;border:1px solid #2a2d5e;width:60px;height:60px;text-align:center;vertical-align:middle;font-size:26px;line-height:60px;mso-line-height-rule:exactly;">
+                  &#9993;
+                </td>
+              </tr>
+            </table>
+
+            <!-- Heading -->
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom:16px;">
+              <tr>
+                <td>
+                  <h1 class="email-heading" style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-size:26px;font-weight:700;line-height:1.2;color:#f2f2f8;letter-spacing:-0.3px;">
+                    Verify your email address
+                  </h1>
+                </td>
+              </tr>
+            </table>
+
+            <!-- Body copy -->
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom:8px;">
+              <tr>
+                <td style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-size:15px;line-height:1.7;color:#8486ab;">
+                  Welcome to BitZimi! You&rsquo;re one step away from accessing the full platform. Please verify your email address to activate your account.
+                </td>
+              </tr>
+            </table>
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom:32px;">
+              <tr>
+                <td style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-size:15px;line-height:1.7;color:#8486ab;">
+                  Click the button below to confirm your address. This link expires in <strong style="color:#c4c6e8;font-weight:600;">24&nbsp;hours</strong>.
+                </td>
+              </tr>
+            </table>
+
+            <!-- CTA button -->
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:32px;">
+              <tr>
+                <td align="center" bgcolor="#6366f1" style="background-color:#6366f1;border-radius:12px;mso-padding-alt:0;">
+                  <!--[if mso]>
+                  <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="${link}" style="height:52px;v-text-anchor:middle;width:248px;" arcsize="12%" stroke="f" fillcolor="#6366f1">
+                  <w:anchorlock/>
+                  <center style="color:#ffffff;font-family:sans-serif;font-size:15px;font-weight:700;letter-spacing:0.3px;">Verify Email Address</center>
+                  </v:roundrect>
+                  <![endif]-->
+                  <!--[if !mso]><!-->
+                  <a href="${link}" target="_blank"
+                     style="display:inline-block;color:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-size:15px;font-weight:700;letter-spacing:0.3px;text-decoration:none;padding:16px 36px;border-radius:12px;background-color:#6366f1;mso-hide:all;">
+                    Verify Email Address
+                  </a>
+                  <!--<![endif]-->
+                </td>
+              </tr>
+            </table>
+
+            <!-- Thin rule -->
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom:24px;">
+              <tr>
+                <td height="1" bgcolor="#1c1e3a" style="background-color:#1c1e3a;font-size:0;line-height:0;mso-line-height-rule:exactly;">&nbsp;</td>
+              </tr>
+            </table>
+
+            <!-- Fallback URL label -->
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom:6px;">
+              <tr>
+                <td style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-size:12px;line-height:1.5;color:#4e5075;">
+                  If the button doesn&rsquo;t work, copy and paste this URL into your browser:
+                </td>
+              </tr>
+            </table>
+            <!-- Fallback URL value -->
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom:28px;">
+              <tr>
+                <td class="btn-fallback" bgcolor="#0b0c1e" style="background-color:#0b0c1e;border-radius:8px;border:1px solid #1c1e42;padding:10px 14px;font-family:'Courier New',Courier,monospace;font-size:11px;line-height:1.6;color:#6366f1;word-break:break-all;">
+                  ${link}
+                </td>
+              </tr>
+            </table>
+
+            <!-- Ignore notice -->
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+              <tr>
+                <td style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-size:13px;line-height:1.6;color:#4e5075;">
+                  If you did not create a BitZimi account, you can safely ignore this email &mdash; no action is required.
+                </td>
+              </tr>
+            </table>
+
+          </td>
+        </tr>
+
+        <!-- Card footer -->
+        <tr>
+          <td class="card-footer" bgcolor="#080917" style="background-color:#080917;border:1px solid #1c1e42;border-top:none;border-radius:0 0 20px 20px;padding:18px 48px 22px;text-align:center;">
+            <span style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-size:12px;line-height:1.5;color:#353759;">
+              &copy; 2025 <strong style="color:#464870;font-weight:600;">BitZimi</strong> &nbsp;&bull;&nbsp; This email was sent automatically. Do not reply.
+            </span>
+          </td>
+        </tr>
+
+      </table>
+    </td>
+  </tr>
+</table>
+
+</body>
+</html>`;
   await send(to, "Verify your BitZimi email address", html);
 }
