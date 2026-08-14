@@ -4,6 +4,7 @@ export const RegisterSchema = z.object({
   email:         z.string().email(),
   password:      z.string().min(8).max(128),
   username:      z.string().min(3).max(32).regex(/^[a-zA-Z0-9_]+$/),
+  fullName:      z.string().max(128).optional(),
   // referralCode:  BZR-prefix — user came through a ?ref= link
   // affiliateCode: BZA-prefix — user came through a ?aff= link
   // Both are optional; only one should be provided per registration.
