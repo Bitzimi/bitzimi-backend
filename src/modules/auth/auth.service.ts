@@ -36,6 +36,7 @@ export async function registerUser(input: {
   email:         string;
   password:      string;
   username:      string;
+  fullName?:     string;
   referralCode?: string;   // BZR code — user came through ?ref= link
   affiliateCode?: string;  // BZA code — user came through ?aff= link
 }) {
@@ -90,7 +91,7 @@ export async function registerUser(input: {
         uplineId:      uplineId ?? undefined,
       },
     });
-    await tx.userProfile.create({ data: { userId: u.id, username: input.username } });
+    await tx.userProfile.create({ data: { userId: u.id, username: input.username, fullName: input.fullName ?? null } });
     await tx.wallet.createMany({ data: ALL_WALLET_TYPES.map(walletType => ({ userId: u.id, walletType })) });
     await tx.kycSubmission.create({ data: { userId: u.id } });
     await tx.withdrawalLimit.create({ data: { userId: u.id } });
