@@ -109,7 +109,13 @@ export async function registerUser(input: {
   // Send verification email asynchronously — don't block registration response
   sendVerificationEmail(user.email).catch(() => {});
 
-  return issueTokenPair(user.id, user.email, user.role);
+  // Registration does NOT authenticate the user.
+  // The user must verify their email before they can log in and receive tokens.
+  return {
+    registered: true,
+    email: user.email,
+    emailVerificationRequired: true,
+  };
 }
 
 export async function loginUser(input: {
