@@ -1,757 +1,1004 @@
-# BitZimi — Full Platform Re-Audit Report
+# BitZimi — Full-Platform Re-Audit Report
 
 **Audit date:** 2026-09-05  
-**Audit type:** Full-platform + full-admin re-audit and reconciliation  
-**Repositories:** `Bitzimi/bitzimi-frontend` + `Bitzimi/bitzimi-backend`  
+**Repositories audited:** `Bitzimi/bitzimi-frontend` + `Bitzimi/bitzimi-backend`  
 **Branch:** `main`  
+**Audit type:** Full main-platform + full Admin Panel re-audit, previous-report reconciliation, security and production-readiness audit
 
-> This report supersedes the previous audit report. It was deliberately expanded beyond the features previously discussed. The review covers the main user platform, every major business domain, identity/security/verification, financial systems, scheduled/AI systems, and the entire admin surface. Existing findings were rechecked and corrected where the current code contradicted the earlier report.
+> This report supersedes the previous audit report. The audit was deliberately expanded beyond the features previously discussed. Every major user-facing domain and every major Admin Panel domain is included. A route/page/module existing in code is not treated as proof that its business lifecycle is complete or production-ready.
 
 ---
 
-## 1. Audit standard and scope
+# 1. Scope
 
-The audit standard is the established BitZimi architecture/business rules plus the actual current repositories. The audit does **not** assume that a feature is production-ready merely because a route, service, page, or schema exists.
+## Main platform
 
-### Main platform scope
+The audit covers the complete user platform, including:
 
-- landing/public pages and application shell;
-- registration, login, email verification, password reset/change, refresh/logout, account deactivation;
-- identity/profile synchronization and public identity;
-- username, full name, avatar, phone number and phone verification;
-- KYC/identity verification, documents, proof of address, verification pipeline and status lifecycle;
-- 2FA/TOTP, security PIN, session/device state and account security;
+- landing/public application shell;
+- registration and referral/affiliate/ambassador attribution;
+- login, email verification, password reset/change, refresh, logout and account deactivation;
+- identity/profile, public user identity, username, full name and avatar;
+- phone number and phone verification;
+- KYC/identity verification, identity documents, selfie, proof of address and verification status lifecycle;
+- 2FA/TOTP, Security PIN, session/device state and account security;
 - settings, language, currency, theme and payment details;
-- Task Marketplace, Create Task, My Task/Task Manager, Task Wallet, Task Vault and proof verification;
-- all seven Games areas, matchmaking, private rooms, lobbies, rounds, fees, settlement and Provably Fair;
-- Football AI Prediction, provider ingestion, AI generation, daily access and scheduled rollover;
+- Task Marketplace, Task Creator, My Task/Task Manager, Task Wallet, Task Vault and proof verification;
+- Colour Prediction, PvP Coin Flip, Dice Duel/Dice Clash, Dice Royale, Dice Arena, Spin Battle and Reaction Tap;
+- matchmaking, private rooms, lobbies, round lifecycle, locking, settlement, fees and Provably Fair;
+- Football AI Prediction, provider ingestion, AI analysis, publication, daily quotas and midnight rollover;
 - Auction Marketplace, bids, settlement and claims;
 - Referral, Affiliate and Ambassador systems;
-- VIP membership, eligibility, benefits, streaks and grants;
-- Wallet, deposits, withdrawals, transfers, ledger, transaction history and reconciliation;
+- unified VIP membership, eligibility, benefits, streaks and grants;
+- Wallet, deposits, withdrawals, transfers, transaction history, ledger and reconciliation;
 - Promotions, announcements, Monthly Challenges/Events and rewards;
-- notifications and notification lifecycle;
-- user-facing content, static pages and translations/localization;
-- any additional user-facing feature present in the repositories.
-
-### Entire Admin scope
-
-- admin authentication/authorization and role/permission model;
-- dashboard and analytics;
-- user management and user detail;
-- KYC review and identity-sensitive operations;
-- financial/deposit/withdrawal/transaction/wallet management;
-- Task management, approval and proof review;
-- Games configuration/monitoring/moderation;
-- Football AI administration;
-- VIP administration;
-- Referral/Affiliate/Ambassador administration;
-- Promotions, Monthly Challenges and rewards;
-- Auction administration;
 - Notifications;
-- Content, pages, platform text and translations;
-- currency, feature and platform configuration;
-- security monitoring, sessions, login history, fraud/compliance and IP controls;
-- audit logging;
+- translation, localization, currency, branding, platform text and content;
+- all additional user-facing services/pages/components present in the repositories;
+- deployment/runtime resilience, background workers and production configuration.
+
+## Entire Admin Panel
+
+The audit covers:
+
+- Admin authentication and route protection;
+- roles and permissions;
+- Dashboard and Analytics;
+- Users and User Detail;
+- KYC and identity-sensitive operations;
+- Financial, Deposits, Withdrawals, Transactions and Wallet Management;
+- Task Dashboard, Pending Tasks, Marketplace, Task Detail and Proof Review;
+- Games management/configuration;
+- VIP;
+- Referral, Affiliate and Ambassador administration;
+- Promotions and Monthly Challenges;
+- Auctions;
+- Football AI, Football data and AI Intelligence administration;
+- Notifications;
+- Content, Static Pages and Platform Text;
+- Security, Audit Log, Security Events, Login History, Sessions, IP Controls, Fraud Alerts and Compliance;
+- Admin Settings;
+- Currency, Languages, Translations, Branding and Features;
 - AI Developer Center;
-- production/deployment configuration and operational controls.
-
-### Evidence classification
-
-- **CONFIRMED:** directly demonstrated by current repository code.
-- **HIGH RISK / NOT PRODUCTION-PROVEN:** implementation exists but an essential production behavior, integration, security property, or end-to-end proof is missing.
-- **MISMATCH:** current implementation conflicts with an established BitZimi rule.
-- **RECONCILED:** an older finding was too broad or is no longer accurate and has been corrected below.
+- all other admin routes/services/configuration found in the repositories.
 
 ---
 
-# 2. Reconciliation with the previous audit
+# 2. Repository baseline and previous-report reconciliation
 
-The previous report was directionally useful but too narrow. It concentrated heavily on tasks, games, wallets, identity synchronization and selected admin wiring. This re-audit found additional gaps in **KYC/identity verification, phone verification, sensitive document storage, authentication security, admin privilege boundaries, Football AI administration, and several platform-wide fallback/duplication patterns**.
+## Current repositories
 
-### Corrections to previous conclusions
+- Backend current `main` tree/HEAD observed: `922b4586091af845e3973159824b8608c8fa03cb`.
+- Frontend current `main` HEAD observed: `c8aeb088edcc320ebeb9081871e9578a34433d21`.
 
-1. **Admin sidebar organization:** the earlier implication that the admin navigation itself was substantially missing/unorganized is corrected. The current frontend has broad grouped navigation for Users, KYC, Financial, Tasks, Games, Football AI, VIP, referrals, growth, auctions, content, notifications, security, audit, currency, languages, translations and feature management. The remaining issue is functionality/authorization/wiring, not absence of the navigation.
-2. **KYC:** the previous report treated KYC mainly as a prerequisite. It did not sufficiently audit the actual verification pipeline. Current code shows that real automated KYC verification is **not implemented**: AWS mode is a stub that falls back to manual review.
-3. **Phone verification:** the previous report did not identify that the current frontend phone verification service is a simulated/localStorage OTP system and that the backend accepts a client-supplied `phoneVerified` boolean. This is a critical security/business-rule finding.
-4. **Identity verification privacy:** the previous report did not sufficiently identify that KYC progress, including sensitive personal information and image data URLs, is persisted in browser localStorage.
-5. **KYC document storage:** current backend storage defaults to local filesystem and its S3 implementation/presigned URL path is still stubbed. This is a production security/availability gap for government ID documents.
-6. **Admin Football AI:** the backend permission model currently gives `moderator_admin` `admin.football.manage`, described as allowing create/edit/settle predictions. That conflicts with the established rule that Football AI predictions are generated automatically and admins monitor the system rather than manually creating predictions.
-7. **Admin privilege boundaries:** the frontend/backend permission catalogs are useful, but several sensitive capabilities still require a dedicated least-privilege verification pass rather than being considered correct merely because permissions exist.
+The previous report referenced an older backend HEAD. That baseline is corrected here.
 
----
+## Important correction
 
-# 3. Critical / P0 findings
+The previous audit was too concentrated on task/game/wallet/referral areas. The present report explicitly elevates **identity, phone verification, KYC, document storage, verification pipeline, profile security, account lifecycle, admin privilege boundaries, and all Admin Panel surfaces** to first-class audit domains.
 
-## P0-01 — Phone verification is not a server-authoritative verification system
+## Admin navigation correction
 
-**CONFIRMED / MISMATCH**
+The previous audit understated the Admin Panel navigation. The current frontend already has broad routes for Users, KYC, Financial, Tasks, Games, VIP, Referrals, Ambassadors, Challenges, Promotions, Auctions, Football/AI, Security/Audit, Notifications, Content, Pages, Text, Analytics, Currency, Languages, Translations, Branding, Features, Settings and AI Developer Center.
 
-Frontend `phoneVerificationService.ts` generates the OTP with `Math.random()`, stores the code in localStorage, logs the OTP to the browser console, and returns the OTP from `sendVerificationCode()`. No real SMS provider is used by this service.
-
-Backend `PATCH /api/v1/users/me/phone` accepts:
-
-- `phoneNumber`
-- `phoneVerified: boolean`
-
-and `profile.service.ts` writes that boolean directly to `userProfile`.
-
-Therefore a client can potentially claim `phoneVerified: true` without a server-generated OTP being successfully delivered and verified.
-
-This is especially serious because phone verification is a canonical prerequisite for VIP/KYC-related access.
-
-**Required outcome:** server-generated OTP, secure storage/hash, expiry, attempt/rate limits, real delivery provider, server-side verification, verified timestamp, abuse protection, and no client-controlled verification flag.
-
-## P0-02 — KYC/identity verification is not actually automated in production
-
-**CONFIRMED / NOT PRODUCTION-PROVEN**
-
-`kyc/verification.ts` documents `aws` as the production mode, but the AWS Rekognition/Textract implementation is a stub and explicitly falls back to manual review. The default is `manual`.
-
-The current system therefore does not perform the represented real face/document/address verification automatically. It can only place submissions in manual review unless mock mode is used.
-
-Mock mode is explicitly capable of returning an automatic approval and must never be enabled in production.
-
-## P0-03 — KYC document storage is not production-secure
-
-**CONFIRMED / SECURITY**
-
-`kyc/storage.ts` defaults to local filesystem storage. The S3 upload and presigned URL functions are stubs. Local documents are returned as static `/uploads/...` paths.
-
-Government identity documents and selfies require private object storage, controlled access, short-lived signed URLs, retention/deletion policy, access auditing and protection against public/static exposure.
-
-## P0-04 — KYC sensitive form data and images are persisted in browser localStorage
-
-**CONFIRMED / SECURITY**
-
-`IdentityVerification.tsx` saves verification progress containing full name, DOB, ID number, address and image data URLs to `identityVerificationProgress` in localStorage. It also uses localStorage metadata to decide whether a verification was already submitted.
-
-This creates unnecessary exposure of highly sensitive identity data on the client and allows stale local state to disagree with backend KYC status.
-
-## P0-05 — Production frontend has multiple silent localhost/empty API fallbacks
-
-**CONFIRMED**
-
-Multiple services/pages directly construct API calls and use `VITE_API_URL` with empty or localhost fallbacks. This includes identity/KYC, profile, fairness, game and admin-related code.
-
-A production build with incomplete environment configuration can fail silently or target an unintended endpoint rather than the deployed backend.
-
-## P0-06 — Authoritative financial/game state still has browser-local persistence paths
-
-**CONFIRMED**
-
-LocalStorage is used for bets, wallet compatibility, game stats/history, global game round state, settlement idempotency state and identity/profile data. Browser persistence must not be the authority for balances, bets, settlements, round identifiers or completed game outcomes.
-
-## P0-07 — Task edit/review authorization still conflicts with the canonical workflow
-
-**CONFIRMED / MISMATCH**
-
-The backend task update path permits protected status input and does not visibly force an edited task back into pending review. The established rule requires an edited task to return to admin review before marketplace publication and prevents creators from directly manipulating protected workflow status.
-
-## P0-08 — Spin Battle winner selection is not stake-proportional
-
-**CONFIRMED / MISMATCH**
-
-The inspected winner derivation does not implement the required stake-weighted probability. The canonical example `$50/$30/$20 -> 50%/30%/20%` is therefore not currently guaranteed.
+The primary Admin problem is therefore **not absence of navigation**. It is authorization precision, backend wiring, lifecycle completeness, auditability and production proof.
 
 ---
 
-# 4. Identity, authentication and account security audit
+# 3. Critical P0 findings
 
-## A-01 — IdentityContext still has browser identity state alongside backend identity
+## P0-01 — Phone verification is simulated and client-authoritative
 
-**CONFIRMED — P0/P1**
+**CONFIRMED.**
 
-`IdentityContext.tsx` builds identity from `bitzimiUser` localStorage and `userProfileService`, while backend `/users/me` is intended to be authoritative. This can leave role, username, profile, verification and admin access stale.
+Frontend `app/services/phoneVerificationService.ts`:
 
-## A-02 — Profile service remains a second client-side profile authority
+- generates a 6-digit OTP with `Math.random()`;
+- stores the OTP in localStorage;
+- logs the OTP to the browser console;
+- returns the OTP from `sendVerificationCode()`;
+- verifies the OTP entirely in the browser.
 
-**CONFIRMED — P1**
+Backend `PATCH /api/v1/users/me/phone` accepts a client-supplied `phoneVerified` boolean and writes it directly to the profile.
 
-`userProfileService.ts` stores profile information and business rules locally while backend profile APIs also own the same state.
+This means phone verification is not a trustworthy server-side verification event.
 
-## A-03 — Profile page uses local user/profile data as fallback and can write locally after backend updates
+**Impact:** phone verification cannot safely gate KYC, VIP, task creation or other privileged features.
 
-**CONFIRMED — P1**
+## P0-02 — VIP KYC contract is inconsistent: `verified` vs `approved`
 
-`Profile.tsx` reads `bitzimiUser`, `userProfileService`, `userAvatar` and backend APIs. Username updates also update local profile state after backend success. This is acceptable only as a cache, but the current code contains fallback behavior that can become a source of truth when the backend is unavailable.
+**CONFIRMED.**
 
-## A-04 — Access and refresh tokens are stored in localStorage
+KYC successful state is represented as `verified`. The VIP subscription service checks for `kyc.status === "approved"`.
 
-**CONFIRMED — HIGH SECURITY RISK**
+This can block a properly KYC-verified user from purchasing VIP.
 
-`backendAuthService.ts` documents localStorage access/refresh token storage. This increases exposure to XSS compared with safer session architecture and must be included in the final security model.
+## P0-03 — VIP purchase does not enforce phone verification
 
-## A-05 — 2FA login challenge architecture is present but requires end-to-end verification
+**CONFIRMED.**
 
-**CONFIRMED / NOT PRODUCTION-PROVEN**
+VIP subscription checks KYC but does not independently require `userProfile.phoneVerified === true`, despite the canonical rule that normal VIP eligibility requires both phone verification and KYC.
 
-Backend login correctly issues a dedicated 2FA challenge token before full tokens and has `loginWith2FA`. However, the full frontend/backend login challenge, expiry, replay protection, rate limiting and failure handling must be E2E verified.
+## P0-04 — KYC verification contains simulated/fallback verification paths
 
-## A-06 — Security PIN and withdrawal security need end-to-end verification
+**CONFIRMED.**
 
-Backend provides PIN set/verify and withdrawal flows use PIN-related controls, but no current E2E evidence proves all withdrawal paths require the intended security checks and cannot be bypassed by alternate endpoints.
+Frontend `documentVerificationService.ts` simulates face detection, face comparison and OCR/address matching. Backend KYC `aws` mode is a stub that falls back to manual review. Mock mode can automatically approve using fabricated confidence values and must never be a production verification path.
 
-## A-07 — Account deactivation exists but financial/account closure consequences require verification
+## P0-05 — KYC production storage/provider path is incomplete
 
-The backend supports soft deletion and password/2FA checks. The audit must still prove that deactivated accounts cannot authenticate, spend, withdraw, create tasks, join games, receive unintended rewards or bypass restrictions through existing sessions/tokens.
+**CONFIRMED.**
 
-## A-08 — Username uniqueness/cooldown exists but concurrent race safety requires database-level proof
+Backend KYC storage defaults to local filesystem. S3 upload and presigned URL functions are stubs. Sensitive identity documents therefore do not yet have a complete production-grade private storage lifecycle in the repository.
 
-The service checks uniqueness and a 30-day cooldown. A read-then-write uniqueness check can race without an appropriate database unique constraint.
+## P0-06 — KYC data and images are persisted in browser localStorage
 
-## A-09 — Public user identity is not consistently separated from internal UUIDs
+**CONFIRMED.**
 
-Some fairness/game/admin payloads use internal IDs. A dedicated short public ID/display identity must be consistently used wherever user identity is exposed to normal users.
+`IdentityVerification.tsx` stores full name, DOB, ID number, address and image data URLs in `identityVerificationProgress`. It also stores submission metadata locally.
 
----
+Government ID/selfie data should not be kept in localStorage as an identity source or long-lived sensitive cache.
 
-# 5. KYC / Identity Verification audit
+## P0-07 — Admin role escalation is possible through generic user edit semantics
 
-## K-01 — Phone verification prerequisite is only frontend-enforced in the KYC page
+**CONFIRMED.**
 
-**CONFIRMED — P0**
+`PATCH /api/v1/admin/users/:userId` is protected by `admin.users.edit`, but its body accepts `role`, and `adminEditUser()` writes the role directly. There is no dedicated Super Admin-only role-management permission in the inspected role catalog.
 
-`IdentityVerification.tsx` checks `userProfileService.getProfile().phoneVerified` before showing the KYC flow. The backend `submitKyc()` does not independently require `userProfile.phoneVerified === true`.
+A lower-privileged admin with user-edit access must not be able to promote a user to another admin role or Super Admin.
 
-A direct API caller may therefore attempt KYC without satisfying the intended phone-verification prerequisite.
+## P0-08 — Admin KYC status can be directly mutated through a generic verification endpoint
 
-## K-02 — KYC submission does not capture/validate the submitted ID number
+**CONFIRMED.**
 
-**CONFIRMED**
+`PATCH /api/v1/admin/users/:userId/verification` accepts `unverified`, `pending`, `verified`, or `rejected` under `admin.kyc.approve`. This bypasses the controlled KYC review model and is not separated as a Super Admin-only override.
 
-The frontend collects `idNumber`, but `SubmitKycBody` contains no `idNumber`, and `submitKyc()` does not receive/store it. This means an important identity field collected by the UI is discarded.
+## P0-09 — Monetary model uses binary floating-point `Float`
 
-## K-03 — KYC document ownership is not visibly validated at submission
+**CONFIRMED.**
 
-**HIGH RISK**
+Prisma uses `Float` for wallet balances, transaction amounts/fees, deposits, withdrawals, task budgets/rewards, subscriptions and VIP earnings.
 
-The submit endpoint accepts document keys supplied by the client. The implementation should prove that each supplied key belongs to the authenticated user's current KYC submission and cannot reference another user's storage object.
+Application rounding to eight decimals does not remove binary floating-point accounting risk.
 
-## K-04 — KYC resubmission and old-document lifecycle need controlled replacement/retention
+## P0-10 — Frontend authentication/identity guard relies on localStorage
 
-The KYC upsert replaces document keys, but there is no demonstrated secure cleanup/retention workflow for superseded identity documents.
+**CONFIRMED.**
 
-## K-05 — KYC approval is not fully atomic with identity/profile/security state
+`routes.tsx` uses the presence of `bitzimiUser` in localStorage as the protected-route authentication check. `IdentityContext` likewise derives role, permissions, profile, phone and verification from browser state.
 
-Admin approval updates the KYC record and then separately updates the profile, swallowing profile update errors with `.catch(() => {})`. This can result in `verified` KYC with unsynchronized profile/address-lock state.
+The backend remains the authorization authority, but the frontend identity boundary is unsafe/stale-prone and can create inconsistent access behavior.
 
-## K-06 — Auto-verification approval also swallows profile synchronization errors
+## P0-11 — Browser-local financial/game state remains authoritative in several paths
 
-The async verification pipeline updates profile full name/address lock separately and suppresses failures. A verification decision must not leave partially synchronized identity state.
+**CONFIRMED.**
 
-## K-07 — Address locking semantics need a documented/admin-controlled exception model
+The frontend stores/restores bets, game rounds, settlement state, game stats/history and wallet compatibility data through localStorage. These values cannot be authoritative for money or game outcomes.
 
-Normal users cannot edit an address after KYC lock. The platform requires a safe correction process for legitimate identity/address changes without granting ordinary admins an unsafe direct bypass.
+## P0-12 — Spin Battle winner selection does not visibly implement stake-proportional probability
 
-## K-08 — KYC status lifecycle lacks complete operational evidence
+**CONFIRMED from prior/current inspection.**
 
-Statuses include unverified/pending/under_review/verified/rejected, but complete transition rules, resubmission behavior, reviewer actions, audit records and notification consistency need E2E verification.
-
-## K-09 — KYC admin document access requires strict authorization and auditing
-
-Admin detail returns document URLs. This is appropriate only if access is permission-gated, short-lived/private, fully audited, non-cacheable where appropriate, and unavailable to roles without KYC document access.
-
-## K-10 — Supported-country/ID-type catalog is duplicated between frontend and backend
-
-The frontend has a fallback country/ID list and the backend has its own list. The backend endpoint exists, but the duplicated fallback can diverge from authoritative configuration.
+The required `$50/$30/$20 -> 50%/30%/20%` weighting is not guaranteed by the inspected winner derivation.
 
 ---
 
-# 6. User profile and settings audit
+# 4. Identity and authentication audit
 
-## P-01 — Backend profile structure is sound but frontend synchronization remains duplicated
+## A-01 — Registration exists and creates core records atomically
 
-Backend has a dedicated `userProfile` model and profile service. The problem is the frontend still treats local profile state as an active fallback/source.
+Backend registration creates the user, profile, wallets, KYC record, withdrawal limit and referral record inside a transaction.
 
-## P-02 — Avatar storage uses the same document storage abstraction as sensitive files
+**Remaining risk:** phone verification is not part of a real server-side identity bootstrap, and attribution across referral/affiliate/ambassador programs requires full E2E proof.
 
-Avatar uploads currently go through `storeDocument()`, which inherits local/S3-stub behavior. Avatar and government-document security requirements should not accidentally share an unsafe public-storage path.
+## A-02 — Email verification exists
 
-## P-03 — Payment details require security/verification lifecycle verification
+Persistent email-verification tokens and expiry exist.
 
-USDT and bank details are exposed through user APIs. The audit must prove correct authorization, masking, modification controls, verification/lock semantics, withdrawal binding and audit history.
+**P1:** resend abuse/rate limiting, replay, expired-token behavior and post-verification frontend synchronization need E2E proof.
 
-## P-04 — Preferences exist but platform-wide propagation is not production-proven
+## A-03 — Login/session lifecycle exists
 
-Theme, language and currency are persisted in backend preferences, but every major page must use the same authoritative preference and translation source.
+Password verification, lockout, email-verification enforcement, suspension/deletion checks, refresh tokens and 2FA challenge flow exist.
 
-## P-05 — Geo-location is cached locally
+**P1:** full replay, revocation, concurrent refresh and suspended-session behavior need E2E verification.
 
-`useGeoLocation.ts` uses localStorage. This is acceptable as a convenience cache only; it must never override backend country/KYC/payment eligibility or security decisions.
+## A-04 — Refresh token rotation exists
+
+Refresh tokens are persisted as hashes and revoked during rotation.
+
+**P1:** token reuse detection and device/session lifecycle need dedicated security tests.
+
+## A-05 — Password reset is persistent and hashed
+
+Reset tokens are hashed and expired tokens are rejected; existing sessions are revoked after successful password reset.
+
+**P1:** full E2E lifecycle remains unproven.
+
+## A-06 — Security PIN exists
+
+PIN hash storage and verification exist.
+
+**P1:** withdrawal one-time-token/replay behavior and every alternate withdrawal path require E2E tests.
+
+## A-07 — 2FA/TOTP exists
+
+Setup, enable, disable and login challenge are implemented.
+
+**P1:** recovery, replay, rate limiting and privileged admin-disable behavior require hardening/testing.
+
+## A-08 — Account suspension/deactivation exists
+
+Backend has suspension/deletion state and login checks.
+
+**P1:** every authenticated business route must consistently reject suspended/deleted accounts, including already-issued sessions.
+
+## A-09 — Frontend auth guard is weaker than backend auth
+
+The route loader checks localStorage rather than server/session validity.
+
+**P1:** the frontend should bootstrap identity from the backend and treat browser state only as non-authoritative cache.
 
 ---
 
-# 7. Task Marketplace / Task Creator / My Task / Proof audit
+# 5. Profile, public identity and settings audit
 
-## T-01 — VIP-only task creation exists but server-side VIP/phone/KYC eligibility must be proven on every creation path
+## P-01 — IdentityContext has multiple sources of truth
 
-## T-02 — Full budget escrow exists but Task Vault is modeled as a wallet row
+Current frontend identity is constructed from:
 
-The backend moves the complete budget into `walletType=task_vault`. This conflicts with the intended conceptual separation of spendable wallet balances and task escrow and should be corrected without breaking accounting.
+- `bitzimiUser`;
+- `userProfileService` localStorage;
+- `bitzimiVerification`;
+- `userAvatar`.
 
-## T-03 — Reward tiers require complete settlement proof
+Backend `/users/me` already provides the appropriate authoritative profile/verification/VIP/permission data.
 
-Free 35%, Verified 45%, VIP 65% must be applied from authoritative verification/VIP status at completion time, not from client claims.
+**P0/P1:** consolidate identity around the backend.
 
-## T-04 — Task edit must force pending review
+## P-02 — Username cooldown is bypassable
 
-Confirmed mismatch described in P0-07.
+`profile.service.ts` implements a 30-day username cooldown, but `users.service.ts:updateMe()` also accepts username changes and does not enforce the same cooldown.
 
-## T-05 — Creator must not directly set protected task status
+**P1:** two profile update paths implement different rules.
 
-Confirmed mismatch described in P0-07.
+## P-03 — Public user ID remains the internal UUID
 
-## T-06 — Pause/resume/stop and remaining escrow require concurrency testing
+Backend `getMe()` returns the internal UUID as `id`. A dedicated short public user ID is still required where the product calls for an `(xxxxxxxx)`-style identity.
 
-The rules are present conceptually, but concurrent completion/edit/stop/pause operations must be tested for exact Task Vault accounting.
+## P-04 — Avatar/profile synchronization remains duplicated
 
-## T-07 — AI-first proof verification exists but worker/retry/idempotency behavior is not fully proven
+Backend avatar/profile state and local avatar state can diverge.
+
+## P-05 — Settings have multiple authority boundaries
+
+Language, currency, theme, payment details and address are persisted in backend APIs, while frontend contexts/cache layers also hold state.
+
+**P1:** backend must remain authoritative and all cached values must be invalidated/refreshed predictably.
+
+## P-06 — Payment details require stronger security controls
+
+Bank and USDT details are stored and exposed through authenticated APIs.
+
+**P1:** modification, masking, withdrawal binding, auditability and security re-verification need explicit E2E proof.
+
+---
+
+# 6. Phone verification audit
+
+This domain was underrepresented in the previous audit and is now a dedicated blocker.
+
+## Current implementation
+
+Frontend generates and verifies OTP locally. Backend merely stores a boolean.
+
+## Required production properties that are currently missing
+
+- server-side OTP generation using cryptographically secure randomness;
+- durable OTP challenge record;
+- hash-at-rest or equivalent secure challenge storage;
+- expiry;
+- attempt limits;
+- resend cooldown;
+- per-user/per-phone/per-IP rate limits;
+- phone normalization;
+- provider integration for actual SMS delivery;
+- verification timestamp;
+- invalidation of prior OTPs;
+- server-side proof before setting `phoneVerified`;
+- prevention of changing a verified phone without a controlled re-verification flow;
+- admin audit of privileged phone verification changes.
+
+**Status:** P0 — not production-ready.
+
+---
+
+# 7. KYC / Identity Verification audit
+
+## K-01 — User KYC UI exists
+
+The frontend provides country, ID type, personal information, document upload, selfie, POA and review stages.
+
+## K-02 — Frontend verification engine is fake
+
+`documentVerificationService.ts` simulates face detection, face matching and OCR/address matching using fabricated/random outcomes.
+
+This service cannot be an authority for KYC.
+
+## K-03 — Frontend stores sensitive KYC material locally
+
+Full form state and image data URLs are persisted in localStorage.
+
+## K-04 — Frontend can fall back to local verification context
+
+When the KYC API is unavailable, the page calls local `submitVerification()` instead of failing closed.
+
+**P1/P0:** identity verification must fail closed when the authoritative backend is unavailable.
+
+## K-05 — ID number is collected but discarded
+
+The frontend collects `idNumber`, but the KYC schema/model does not store it and the submit payload does not send it.
+
+## K-06 — KYC backend accepts document keys from the client
+
+The server should prove that every key belongs to the current user's authorized upload set and cannot point to another user's object.
+
+## K-07 — KYC async processing is process-local
+
+`submitKyc()` uses `setImmediate()` to run verification. A process restart can interrupt the verification job.
+
+**P1:** use a durable job/outbox/queue model.
+
+## K-08 — KYC provider integration is incomplete
+
+AWS Rekognition/Textract are described but not implemented; `aws` mode falls back to manual.
+
+## K-09 — KYC storage is incomplete for production
+
+Local filesystem is the default and S3/presigned URLs are stubs.
+
+## K-10 — Admin approval does not consistently lock address
+
+Auto-approval sets `addressLockedByVerification`, while the admin approval path updates the KYC status/profile name but does not perform the same address-lock operation.
+
+## K-11 — Admin KYC state can be mutated outside the review lifecycle
+
+Generic admin user verification endpoint permits direct status changes.
+
+## K-12 — KYC notifications use process-local callbacks
+
+Approval/rejection notifications are created via `setImmediate()` and can be lost on process termination.
+
+## K-13 — KYC document lifecycle needs retention/deletion rules
+
+Replacement/resubmission can leave old sensitive objects without an explicit retention/deletion workflow.
+
+## K-14 — Country/ID catalog is duplicated
+
+Frontend fallback list and backend supported-country list can diverge.
+
+---
+
+# 8. VIP audit
+
+## V-01 — Unified VIP subscription exists
+
+The repository has one platform-wide VIP system.
+
+## V-02 — KYC status mismatch breaks eligibility
+
+VIP checks `approved`, while KYC uses `verified`.
+
+**P0.**
+
+## V-03 — Phone verification is not enforced
+
+**P0.**
+
+## V-04 — Task creation trusts active subscription rather than complete eligibility
+
+Task creation checks active subscription but does not independently require KYC + phone verification.
+
+**P1.**
+
+## V-05 — Admin custom-duration grants are missing
+
+The required 1-week, 2-week, 1-month, 3-month and 1-year administrative VIP grant capability is not present in the inspected service.
+
+## V-06 — VIP duration is structurally fixed at 30 days
+
+This conflicts with custom admin grants.
+
+## V-07 — Streak logic has atomic claim protection
+
+The guarded update is a positive implementation, but reward calculations and concurrency need E2E verification.
+
+## V-08 — VIP financial values use Float
+
+Subscription price and streak earnings are monetary Float fields.
+
+---
+
+# 9. Task Marketplace / My Task / Proof audit
+
+## T-01 — VIP-only task creation exists
+
+## T-02 — Full task budget is escrowed before review
+
+The task service debits Task Wallet and credits `task_vault` atomically.
+
+## T-03 — Task Vault is modeled as a wallet row
+
+This conflicts with the intended conceptual separation between spendable wallet balances and task escrow.
+
+## T-04 — Task edit does not force re-review
+
+Confirmed mismatch: creator updates can preserve active/paused status instead of automatically returning the edited task to pending review.
+
+## T-05 — Protected task status is exposed to creator update schema
+
+Although restricted to active/paused, the status field should not permit creators to bypass review semantics.
+
+## T-06 — Reward tier settlement requires concurrency proof
+
+Free 35%, Verified 45%, VIP 65% must be derived from authoritative state at completion time.
+
+## T-07 — Proof AI/manual flow exists
+
+**P1:** durable worker, retry, idempotency and exact-once reward settlement need E2E proof.
 
 ## T-08 — Frontend proof/integrity logic duplicates backend authority
 
-## T-09 — My Task ownership and creator-only visibility require authorization tests
+Client validation may remain UX-only but cannot determine approval/reward.
 
-## T-10 — Admin task and proof controls require permission/transition testing
+## T-09 — My Task ownership and privacy require E2E tests
 
----
-
-# 8. Games audit
-
-## G-01 Shared game foundation
-
-The backend contains substantial game modules, matchmaking/private rooms, rounds and settlement logic, but process-local runtime state creates restart/multi-instance risk.
-
-## G-02 Colour Prediction
-
-- User join/participation flow is not production-proven.
-- Fee/accounting representation can disagree between bet records and settlement.
-- Daily displayed round number vs continuous underlying identifier needs exact midnight testing.
-- Static frontend lobby configuration can diverge from backend configuration.
-
-## G-03 Coin Flip
-
-Core 1v1 architecture exists, but matchmaking, private rooms, stake validation, concurrency, cancellation, settlement and fairness need complete E2E proof.
-
-## G-04 Dice Clash
-
-Core 1v1 architecture exists; complete lifecycle, tie handling, concurrency and fairness require E2E proof.
-
-## G-05 Dice Royale
-
-- Current user join/play path is not production-proven.
-- Rule copy previously said “highest unique roll,” which is incorrect.
-- Highest-number winner rule and deterministic tie handling require backend/frontend alignment.
-- Maximum 6 and 5-second lock require race testing.
-
-## G-06 Dice Arena
-
-- Current join flow is not production-proven.
-- First/second/third-player countdown semantics require E2E testing.
-- Maximum 6, lock threshold, top-two winner logic and 60/40 settlement require concurrency testing.
-
-## G-07 Spin Battle
-
-- Stake-proportional winner selection is a confirmed mismatch.
-- Wheel display and backend probability must use the same weights.
-- Maximum 12 and lock-at-5-seconds require race testing.
-
-## G-08 Reaction Tap
-
-Skill game architecture exists. It must remain outside Provably Fair and requires anti-abuse/reaction-timing/concurrency verification.
-
-## G-09 Provably Fair
-
-Applicable games have verification infrastructure, but multiplayer verification is incomplete/inconvenient and internal UUID exposure exists. The verifier must independently validate seeds, commitments, participant data, weighted selection where applicable and final result.
-
-## G-10 Client-side game state
-
-Browser-local bets, stats, history, round numbers and settlement caches must not be authoritative.
-
-## G-11 Game admin configuration
-
-Admin pages/navigation exist, but actual create/edit/publish/disable/configure/monitor capabilities and backend enforcement require contract-by-contract verification.
+## T-10 — Task screenshot/document storage inherits incomplete storage adapter
 
 ---
 
-# 9. Football AI Prediction audit
+# 10. Games audit
 
-## F-01 — Architecture exists but production automation is not proven
+## Shared game foundation
 
-Provider sync, AI analysis and prediction modules exist, but multiple consecutive real/simulated daily cycles have not been proven end-to-end.
+**P1:** backend must remain authoritative for joins, stakes, balances, timers, locks, outcomes and settlement.
 
-## F-02 — Admin permission conflicts with the established operating model
+**P1:** localStorage bet/round/settlement state must be removed as authority.
 
-`rolePermissions.ts` grants `moderator_admin` `admin.football.manage`, and the permission is described as create/edit/settle football predictions. The established BitZimi rule is that AI automatically generates predictions and admins monitor/diagnose the system rather than manually predicting.
+**P1:** process-local runtime state must survive restart/multi-instance deployment through persistent state or durable coordination.
 
-This must be reconciled: operational monitoring/configuration may be permitted, while manual prediction creation should not silently replace the automated pipeline.
+**P1:** every money-moving game operation requires idempotency and concurrency tests.
 
-## F-03 — Free-user exactly-two-games/day quota requires backend enforcement
+## Colour Prediction
 
-Frontend visibility is insufficient. Quota must be authoritative and reset correctly by configured system timezone.
+- Red/Blue multiplayer exists structurally.
+- Fee/accounting representation mismatch remains.
+- Join/round lifecycle is not production-proven.
+- Midnight displayed round reset versus continuous global identity requires deterministic timezone testing.
+- Frontend static lobby configuration can diverge from admin configuration.
 
-## F-04 — VIP gating must be unified
+## PvP Coin Flip
 
-There must be one VIP subscription and one authoritative eligibility decision across every VIP-only Football AI category.
+- 1v1/matchmaking/private match/stake flow exists structurally.
+- Requires full concurrency, settlement, timeout and Provably Fair E2E proof.
 
-## F-05 — Midnight publication/rollover requires scheduler reliability
+## Dice Clash
 
-Prepared tomorrow predictions must remain inaccessible until the configured rollover time and then become available without manual admin action.
+- 1v1/matchmaking/private match/stake flow exists structurally.
+- Requires tie, settlement, fairness and race-condition proof.
 
-## F-06 — Football points on hub entry require idempotency
+## Dice Royale
 
-Repeated page refreshes/entries must not create unintended duplicate rewards.
+- User join/play lifecycle remains not production-proven.
+- Canonical rule is highest dice number wins.
+- Previous frontend copy used “highest unique roll,” which is incorrect.
+- Six-player cap, second-player countdown, 5-second lock and deterministic tie behavior require E2E tests.
 
-## F-07 — Provider failure/stale data handling requires production evidence
+## Dice Arena
 
-A failed/stale provider response must not silently publish invalid predictions.
+- User join/play lifecycle remains not production-proven.
+- Third player must trigger countdown.
+- Six-player cap, 5-second lock, top-two winners and 60/40 settlement require concurrency proof.
 
----
+## Spin Battle
 
-# 10. Auction Marketplace audit
+- Stake-proportional winner selection is a P0 mismatch.
+- Wheel visual segments must match economic weights.
+- Twelve-player cap, countdown and lock require concurrency proof.
+- Provably Fair must verify the weighted selection independently.
 
-## AU-01 — Admin-to-user auction lifecycle is not production-proven
+## Reaction Tap
 
-Admin navigation and backend auction services exist, but complete create → activate → list → bid → live update → close → settle → claim behavior needs E2E proof.
+- 1v1 skill game exists structurally.
+- Requires anti-abuse, timing, settlement and E2E proof.
+- Provably Fair remains correctly excluded.
 
-## AU-02 — Bid concurrency and balance reservation require financial race testing
+## Provably Fair
 
-## AU-03 — Failed/cancelled/expired auctions require explicit settlement behavior
-
-## AU-04 — Auction frontend has an independent game-wallet helper
-
-`app/auction/hooks/useGameWallet.ts` is another client transport/state path and must be consolidated with authoritative wallet APIs.
-
-## AU-05 — User identity in auction/bid views must use public identity rules
-
----
-
-# 11. Referral / Affiliate / Ambassador audit
-
-## R-01 — Registration attribution supports referral/affiliate codes but ambassador attribution must be independently proven
-
-## R-02 — Self-referral/circular attribution protections require E2E testing
-
-## R-03 — Task/game commission calculation and destination wallets require financial reconciliation
-
-## R-04 — Commission idempotency is essential across workers/retries
-
-## R-05 — Referral reward timing must remain aligned with the established first-VIP-purchase rule
-
-## R-06 — Affiliate and ambassador admin controls require least-privilege testing
-
-## R-07 — Frontend referral/affiliate identity should not depend on stale localStorage state
+- Verification IDs/seed infrastructure exists.
+- Multiplayer verification is incomplete/inadequately rendered.
+- Spin Battle and multiplayer dice require player-list-aware verification.
+- Internal UUID exposure needs reduction where public identity is intended.
 
 ---
 
-# 12. Wallet / Financial audit
+# 11. Football AI Prediction audit
 
-## W-01 — Legacy `main` wallet remains in schema/service/auth creation
+The frontend and backend contain a dedicated Football AI product and extensive Admin Football/AI surfaces.
 
-`WalletType` and `ALL_WALLET_TYPES` still include `main`. This conflicts with the intended wallet model.
+## Findings
 
-## W-02 — Task Vault remains represented as a Wallet row
-
-Confirmed architectural mismatch.
-
-## W-03 — One-wallet-per-user requirement is not equivalent to the current multiple wallet-type rows
-
-The intended model is one user wallet concept with spendable sub-balances; the current physical model is multiple rows per user. This must be reconciled deliberately rather than assumed correct.
-
-## W-04 — Deposit lifecycle requires provider/webhook proof
-
-Crypto and fiat/payment-provider modules exist, but no current evidence proves complete production reconciliation, webhook idempotency and failure recovery.
-
-## W-05 — Withdrawal lifecycle requires complete proof
-
-Minimum/maximum limits, PIN, KYC/phone/VIP tiering, bank/USDT destination, fees, status transitions, processing and reversal need end-to-end testing.
-
-## W-06 — Admin wallet adjustment is sensitive
-
-Credit/debit/freeze/unfreeze operations require strict permission, reason, idempotency, immutable audit record and reconciliation.
-
-## W-07 — Financial totals must derive from backend ledger/wallet state only
-
-Frontend local balances cannot be authoritative.
-
-## W-08 — Ledger-to-wallet reconciliation is not yet production-proven
-
-A formal reconciliation process is required before declaring financial readiness.
+- **P1:** provider ingestion and fallback behavior are not production-proven end-to-end.
+- **P1:** automatic prediction generation is not proven across multiple daily cycles.
+- **P1:** Free quota of exactly 2 games/day requires concurrency/idempotency testing.
+- **P1:** unified VIP gating must use the corrected KYC + phone eligibility definition.
+- **P1:** midnight timezone/rollover behavior requires deterministic tests.
+- **P1:** tomorrow's predictions must remain inaccessible until the correct day begins.
+- **P1:** Hub entry points must be idempotent and cannot repeatedly reward refresh/navigation.
+- **P1:** provider failures/stale fixtures must not silently become valid predictions.
+- **P1:** the Admin permission catalog gives `moderator_admin` `admin.football.manage`, including prediction-management semantics. This must be reconciled with the monitor-first automatic-AI requirement.
+- **P2:** provider secrets/configuration/health need production operational verification.
 
 ---
 
-# 13. VIP, KYC eligibility and privilege audit
+# 12. Auction Marketplace audit
 
-## V-01 — One unified VIP subscription exists conceptually
+User and Admin auction surfaces exist.
 
-No evidence should introduce separate VIP subscriptions for Football AI or Tasks.
+## Findings
 
-## V-02 — VIP eligibility must be server-side: active VIP + phone verified + KYC verified
-
-Current KYC/phone weaknesses make this a high-risk dependency.
-
-## V-03 — Custom VIP grant durations are not confirmed as complete
-
-Admin must support the established custom durations: 1 week, 2 weeks, 1 month, 3 months and 1 year.
-
-## V-04 — Super Admin-only KYC award/override is not implemented as a dedicated capability
-
-Current permission catalog contains KYC view/approve/reject but no explicit `kyc.override`/`kyc.award` capability. This needs an explicit privileged path rather than using ordinary approval as a substitute.
-
-## V-05 — Privileged VIP/KYC actions require immutable audit records
+- **P1:** complete admin-create → active → bid → end → winner → settlement → claim lifecycle is not production-proven.
+- **P1:** scheduler uses process-local intervals and needs restart/multi-instance safety.
+- **P1:** bid concurrency and reserved funds need race tests.
+- **P1:** outbid/release/settlement idempotency needs financial tests.
+- **P1:** auction wallet/ledger effects require reconciliation.
+- **P2:** inventory/claim/expired/cancelled states need E2E coverage.
 
 ---
 
-# 14. Promotions / Monthly Events / Notifications / Rewards audit
+# 13. Referral / Affiliate / Ambassador audit
 
-## M-01 — Promotion lifecycle exists but production scheduling/eligibility/reward funding needs E2E proof
+## Findings
 
-## M-02 — Monthly Challenge/Event lifecycle needs complete participant/leaderboard/reward settlement proof
-
-## M-03 — Referral/Affiliate/Ambassador linkage into event rewards must be idempotent
-
-## M-04 — Notification creation and delivery exist but retry/read/unread/delete/broadcast behavior requires E2E proof
-
-## M-05 — Admin broadcast notifications require strict permission and abuse controls
-
-## M-06 — Reward grants across promotions/events/football/task/game systems must never double-credit
+- **P1:** referral and affiliate codes are resolved into an `uplineId`; the full semantic distinction among Referral, Affiliate and Ambassador lineage must be tested.
+- **P1:** self-referral/circular attribution prevention needs explicit tests.
+- **P1:** commission worker retry/exactly-once behavior needs tests.
+- **P1:** first-VIP referral reward must not duplicate on renewal/concurrency.
+- **P1:** ambassador application/approval/activity/pool distribution is not production-proven.
+- **P1:** Referral/Affiliate/Ambassador wallet settlement needs ledger reconciliation.
+- **P1:** admin management permissions require route-by-route authorization tests.
 
 ---
 
-# 15. Content / Translation / Localization audit
+# 14. Wallet / Financial audit
 
-## C-01 — Admin-managed content architecture exists
+## F-01 — Float-based accounting
 
-The current admin navigation includes Content Library, Static Pages and Platform Text. This is a correction to any previous suggestion that these areas were absent.
+**P0/P1 systemic issue.**
 
-## C-02 — Platform-wide translation coverage is not proven
+Wallets, transactions, deposits, withdrawals, tasks and VIP monetary fields use Float.
 
-A translation/configuration system exists, but every user-facing string across the main application and admin panel must be inventoried and migrated where required.
+## F-02 — Legacy `main` wallet remains
 
-## C-03 — Language catalog and frontend language options must match backend-supported languages
+`WalletType` and registration still include `main`.
 
-## C-04 — Currency formatting and currency configuration require central authoritative behavior
+## F-03 — Task Vault remains a wallet row
 
-## C-05 — Hardcoded game/task/verification copy remains a synchronization risk
+Must be reconciled with the intended escrow model.
 
----
+## F-04 — Atomic debit is a positive implementation
 
-# 16. Entire Admin Panel audit
+`debitWallet()` uses a conditional update requiring sufficient balance and non-frozen state, reducing read-then-write race risk.
 
-## AD-01 — Admin navigation coverage is broad and substantially present
+**P1:** every caller must be verified to use the same primitive and record matching ledger entries.
 
-Current navigation covers Users, KYC, Financial, Tasks, Games, Football AI, VIP, Referrals/Affiliates, Ambassador, Challenges, Football Points, Promotions, Auctions, Content, Pages, Platform Text, Notifications, Security, Audit, Currency, Languages, Translations and Feature Management.
+## F-05 — Generic credit path requires caller-level validation
 
-**RECONCILED:** the main remaining problem is not missing menu items; it is verifying every page's API wiring, permissions, data correctness and mutation behavior.
+Every credit must enforce valid positive amount/business semantics and be paired with a ledger event.
 
-## AD-02 — Frontend permissions mirror backend but are duplicated
+## F-06 — Deposit lifecycle not production-proven
 
-Frontend explicitly says its permissions must mirror backend `rolePermissions.ts`. Duplication creates drift risk. Backend must remain authoritative.
+Provider confirmation, webhooks, idempotency and reconciliation require live/E2E verification.
 
-## AD-03 — Admin route guards are UI protection, not security boundaries
+## F-07 — Withdrawal lifecycle not production-proven
 
-All sensitive operations must be protected by backend permission checks regardless of frontend visibility.
+State transitions, limits, fees, PIN security, provider settlement and duplicate processing require E2E proof.
 
-## AD-04 — KYC ordinary admin vs Super Admin boundary is incomplete
+## F-08 — Admin wallet mutation is high risk
 
-Ordinary support admins can approve/reject KYC, which is acceptable for review if intended. A separate Super Admin-only KYC award/override operation is still missing/unclear.
+Credit/debit/freeze/unfreeze require strict least-privilege permissions, mandatory reason, immutable audit record and concurrency safety.
 
-## AD-05 — Football AI admin can expose manual-management permissions inconsistent with automated prediction architecture
+## F-09 — Financial reconciliation is not proven globally
 
-See F-02.
-
-## AD-06 — Financial admin roles require least-privilege verification
-
-`finance_admin` has wallet management and several financial capabilities. Each endpoint must be tested to ensure it cannot perform unrelated privileged actions.
-
-## AD-07 — Admin user editing is high risk
-
-User edit/suspend/limit operations require field-level authorization, audit trails and protection against modifying privileged fields such as role, KYC status or wallet state through generic user-edit endpoints.
-
-## AD-08 — Admin wallet operations require independent financial audit controls
-
-## AD-09 — Admin document access requires data-protection controls
-
-## AD-10 — Admin configuration pages must be verified against actual backend config keys
-
-A page existing does not prove that its setting changes the behavior claimed by the UI.
-
-## AD-11 — Admin analytics must not be treated as authoritative until reconciled against transactional sources
-
-## AD-12 — Admin security pages exist but operational controls require E2E proof
-
-Security Events, Login History, Sessions, IP Controls, Fraud Alerts and Compliance are present in navigation; their mutation controls and enforcement must be verified.
-
-## AD-13 — Admin Audit Log coverage must include every sensitive mutation
-
-Especially KYC, wallet, withdrawal, user suspension, VIP grant, configuration, promotion, auction, task approval/rejection and security controls.
-
-## AD-14 — AI Developer Center is present architecturally but real scan/fix execution remains a separate readiness item
-
-Permissions exist for developer view/scan/patch, but this must not be confused with a completed production scanning/fix system.
-
-## AD-15 — Mobile and desktop admin navigation must stay permission-consistent
-
-The repository contains both sidebar and mobile navigation definitions; they must not drift.
+All task/game/VIP/auction/referral/affiliate/promotion/withdrawal/deposit effects need ledger-to-balance reconciliation tests.
 
 ---
 
-# 17. Security / database / runtime / infrastructure audit
+# 15. Promotions / Challenges / Notifications audit
 
-## S-01 — Supabase RLS remains a critical live-environment verification item
+## Promotions
 
-Earlier observations showed public tables without RLS. Current repository code cannot prove the live Supabase state, so this remains **NOT PRODUCTION-PROVEN** until verified directly.
+- Scheduler uses process-local interval.
+- Reward/funding/featured-placement financial effects require reconciliation.
+- Activation/expiry/overlap behavior requires E2E proof.
 
-## S-02 — Sensitive document storage must be private
+## Monthly Challenges/Events
 
-See KYC storage findings.
+- Structure exists.
+- Referral/ambassador/reward linkage requires complete lifecycle tests.
+- Reward distribution needs exactly-once proof.
 
-## S-03 — Process-local game/worker state creates restart and multi-instance risk
+## Notifications
 
-Game engines and some background/security behavior depend on runtime memory. Render restarts or multiple instances must not lose authoritative state.
-
-## S-04 — Background jobs require durable scheduling/locking/idempotency
-
-Football sync, AI analysis, auto-publish, commissions, crypto monitoring, streak reminders, screenshot retention and withdrawal-limit jobs exist, but production scheduler behavior and duplicate-run protection require verification.
-
-## S-05 — API transport duplication increases security/configuration drift
-
-Multiple frontend API helpers exist.
-
-## S-06 — Rate limiting must be verified on authentication, OTP, password reset, KYC upload, financial and admin-sensitive endpoints
-
-## S-07 — Upload validation requires MIME/content/size/path/security testing
-
-Data URL acceptance alone is not sufficient evidence of secure file handling.
-
-## S-08 — Secrets/configuration must never be exposed through frontend fallbacks or logs
-
-The OTP console logging is a confirmed example that must be removed.
-
-## S-09 — Refresh-token rotation should be concurrency/replay tested
-
-Current rotation revokes the stored token and creates a new one, but concurrent refresh requests need race/replay testing.
-
-## S-10 — Database constraints and indexes require final production review
-
-Historical observations included unindexed foreign keys and unused indexes. Current schema must be rechecked before final sign-off.
-
-## S-11 — JSON-as-text fields require validation and queryability review
-
-## S-12 — Production deployment configuration requires final cross-environment verification
-
-Render backend, Vercel frontend, Supabase and all required environment variables must be tested as one deployed system.
+- User and Admin notification modules exist.
+- Several critical notification calls use `setImmediate()`.
+- Critical events should use durable event/outbox/queue semantics.
+- Read/unread/delete/broadcast/template/translation behavior needs E2E proof.
 
 ---
 
-# 18. Testing / verification maturity
+# 16. Translation / Language / Currency / Branding / Content audit
 
-## Q-01 — Frontend automated tests are insufficient
+Dedicated backend/admin surfaces exist.
 
-The frontend package does not expose a normal automated test script and the AI developer tooling reports no Vitest/Jest suite.
+## Findings
 
-## Q-02 — Backend code presence is not equivalent to business-flow proof
-
-Many domains have routes/services but lack demonstrated E2E evidence.
-
-## Q-03 — Financial and game concurrency testing is mandatory
-
-## Q-04 — Restart/recovery testing is mandatory for workers and games
-
-## Q-05 — Security regression testing is mandatory for every admin/financial/identity mutation
+- **P1:** full-platform translation coverage is not proven.
+- **P1:** frontend/backend supported-language lists are duplicated.
+- **P1:** frontend/backend currency lists are duplicated.
+- **P1:** admin configuration propagation/cache invalidation needs testing.
+- **P1:** missing translation-key fallback needs deterministic behavior.
+- **P2:** final static scan is required for hardcoded user-facing strings that should be catalog-backed.
 
 ---
 
-# 19. Confirmed platform strengths
+# 17. Admin Panel — full audit
 
-The re-audit also confirms substantial existing infrastructure that should be preserved rather than rewritten unnecessarily:
+The Admin Panel is broad and materially present. The remaining work is primarily functional correctness, authorization, lifecycle wiring and production proof.
 
-- modular Fastify backend;
-- Prisma/PostgreSQL architecture;
-- relational user/profile separation;
-- refresh-token persistence/rotation structure;
-- password hashing and login lockout framework;
-- TOTP/2FA infrastructure;
-- KYC submission and admin review architecture;
-- task escrow mechanics;
-- AI-first task proof architecture;
-- referral/affiliate/commission infrastructure;
-- substantial implementations for all game domains;
-- Provably Fair engine and verification IDs;
-- Football provider/AI/publishing architecture;
-- auction services;
-- promotion/challenge/notification/content infrastructure;
-- backend RBAC/permission model;
-- admin security/audit modules;
-- broad admin navigation coverage;
-- production deployment stack integration points.
+## AD-01 — Admin authentication/guard
 
-These strengths do **not** remove the gaps above; they define the existing foundation to complete.
+Frontend AdminLayout requires `admin.dashboard.view`, but child route components are not individually wrapped with their exact required permission. Backend route permissions remain the actual security boundary.
+
+**P1:** frontend route-level permissions should match backend permissions for correct UX and defense-in-depth.
+
+## AD-02 — Admin role management
+
+**P0:** role can be changed under generic `admin.users.edit` semantics. A dedicated Super Admin-only role-management capability is required.
+
+## AD-03 — Admin KYC
+
+**P0:** direct status mutation is too broad and not Super Admin-only.
+
+**P1:** approval must atomically synchronize KYC/profile/address lock.
+
+**P1:** sensitive document access requires private storage, short-lived access and audit.
+
+## AD-04 — Admin Users
+
+User detail includes profile, verification, VIP, balances, transactions, task summary, security and payment details.
+
+**P1:** field-level privacy/masking and least privilege need verification.
+
+**P1:** admin edit must follow the same profile validation rules as user-facing edit.
+
+## AD-05 — Admin Financial
+
+Deposits, withdrawals, transactions and wallets have dedicated routes/pages.
+
+**P1:** every financial mutation needs strict permission + audit + reconciliation proof.
+
+## AD-06 — Admin Tasks
+
+Task pending, marketplace, detail and proof review pages exist.
+
+**P1:** only authorized admin transitions should approve/reject; creators must not bypass review.
+
+## AD-07 — Admin Games
+
+Game configuration/management exists.
+
+**P1:** admin configuration must be the runtime source where configured, not shadowed by static frontend lobby constants.
+
+**P1:** historical round results must be immutable.
+
+## AD-08 — Admin VIP
+
+View/cancel/reset functionality exists.
+
+**P1:** custom-duration grant is missing.
+
+**P1:** grants/cancellations/resets need immutable audit records.
+
+## AD-09 — Admin Referral/Affiliate/Ambassador
+
+Surfaces exist.
+
+**P1:** permission and lifecycle tests are required for application approval, attribution, commissions and pool distribution.
+
+## AD-10 — Admin Football AI
+
+Dedicated Football/AI administration exists.
+
+**P1:** monitor-first semantics must be reconciled with any manual prediction-management permission.
+
+## AD-11 — Admin Auctions
+
+Dedicated admin auction page/routes exist.
+
+**P1:** full lifecycle and settlement need E2E proof.
+
+## AD-12 — Admin Promotions/Challenges
+
+Dedicated surfaces exist.
+
+**P1:** reward funding, scheduling and exact-once distribution need proof.
+
+## AD-13 — Admin Notifications/Content/Pages/Text
+
+Dedicated management surfaces exist.
+
+**P1:** every mutation requires correct permission, audit and translation/content propagation.
+
+## AD-14 — Admin Security/Audit/Compliance
+
+The frontend has dedicated security pages for events, login history, sessions, IP controls, fraud alerts and compliance.
+
+**P1:** page existence does not prove complete event coverage. Role changes, KYC decisions, financial mutations, security changes, VIP grants, task/game/admin actions and configuration changes must all be traceable.
+
+## AD-15 — Admin Settings/Configuration
+
+**P1:** configuration precedence across environment variables, SystemConfig, dedicated tables and frontend constants must be explicit.
+
+## AD-16 — Admin Developer Center
+
+The AI Developer Center exists.
+
+**P1:** generated/applicable patches require strict authorization, review, audit, rollback and post-fix verification.
 
 ---
 
-# 20. Master finding index
+# 18. Database and security audit
 
-### P0 / critical
+## DB-01 — Money uses Float
 
-- P0-01 Phone verification can be client-controlled/simulated.
-- P0-02 Real KYC verification provider implementation is absent; AWS mode is a stub/manual fallback.
-- P0-03 Sensitive KYC storage is not production-secure/private by default.
-- P0-04 Sensitive KYC form data/images are persisted in localStorage.
-- P0-05 Production API fallback/configuration risk.
-- P0-06 Browser-local authoritative financial/game state.
-- P0-07 Task edit/status workflow mismatch.
-- P0-08 Spin Battle stake-probability mismatch.
+P0/P1 systemic accounting issue.
 
-### P1 / high
+## DB-02 — Legacy wallet model
 
-- A-01 through A-09 identity/auth/profile/security.
-- K-01 through K-10 KYC/identity.
-- P-01 through P-05 profile/settings.
-- T-01 through T-10 tasks/proofs.
-- G-01 through G-11 games/fairness.
-- F-01 through F-07 Football AI.
-- AU-01 through AU-05 auctions.
-- R-01 through R-07 referral/affiliate/ambassador.
-- W-01 through W-08 wallet/financial.
-- V-01 through V-05 VIP/KYC privilege.
-- M-01 through M-06 promotions/events/notifications.
-- C-01 through C-05 content/localization.
-- AD-01 through AD-15 admin.
-- S-01 through S-12 security/infrastructure.
-- Q-01 through Q-05 testing.
+`main` remains.
 
-### P2 / cleanup / hardening
+## DB-03 — KYC lacks ID number field despite frontend collection
 
-- duplicate frontend API transports;
-- duplicate frontend profile/proof/financial logic;
-- static configuration copies;
-- legacy `main` wallet structures;
-- obsolete localStorage compatibility paths;
-- dead services/components/routes after dependency analysis;
-- unused indexes/legacy database fields/models after migration verification;
-- stale comments/phase numbering in backend permission definitions;
-- duplicated country/ID catalogs;
-- redundant admin navigation definitions where a shared source can safely replace them.
+Contract mismatch.
+
+## DB-04 — Phone verification has no challenge model
+
+No durable OTP state exists.
+
+## DB-05 — Public identity is not separated from internal UUID
+
+Needs dedicated public identifier if required by product.
+
+## DB-06 — JSON-as-text fields
+
+Requirements, metadata and several business structures use JSON strings. This reduces queryability/constraint strength and needs a final schema review.
+
+## DB-07 — RLS
+
+Historical Supabase observations showed RLS disabled on public tables. Current live Supabase policy state must be verified before production sign-off; repository code alone cannot establish it.
+
+## DB-08 — Sensitive document storage
+
+Local storage/default and incomplete S3 path are not acceptable for production KYC data.
 
 ---
 
-# 21. Final audit conclusion
+# 19. Runtime, workers and scheduled jobs
 
-The current BitZimi repositories contain a broad and substantial platform implementation, but **BitZimi cannot yet be classified as 100% production-ready**.
+The backend starts multiple workers/jobs including withdrawal resets, screenshot retention, audit retention, streak reminders, crypto deposits, commissions, AI analysis, football sync and auto-publishing. It also uses process-local intervals for promotions/auctions/private-room cleanup.
 
-The most important correction from this re-audit is that the platform's verification/security boundary is weaker than the previous audit documented:
+## Findings
 
-1. phone verification is currently simulated/client-controlled;
-2. KYC is currently an application workflow with manual fallback rather than a completed real automated verification service;
-3. sensitive identity documents are not yet backed by a completed private production storage implementation;
-4. KYC frontend state contains sensitive data in localStorage;
-5. backend KYC does not independently enforce phone verification;
-6. KYC identity fields such as ID number are collected by the UI but not included in the backend submission schema;
-7. admin privileged boundaries need dedicated verification, particularly KYC override and Football AI manual-management permissions.
+- **P1:** process-local scheduling is vulnerable to restart and multi-instance duplication.
+- **P1:** `setImmediate()` is used for important verification, notifications and audit events; critical events can be lost on process termination.
+- **P1:** jobs require idempotency keys/locks/leases and durable retry state.
+- **P1:** restart recovery must be tested for games, KYC, Football AI, Auctions, Promotions, Commissions and Notifications.
 
-The previously known Task, Games, Wallet, identity synchronization, configuration, Provably Fair, Auction, Football AI, referral, admin and production-resilience findings remain in scope and have been reconciled above.
+---
 
-**No implementation phase should be considered complete solely from compilation. Every domain must pass backend authorization tests, frontend/backend contract tests, financial/game concurrency tests where applicable, restart/recovery tests, and end-to-end user + admin verification.**
+# 20. Frontend architecture audit
 
-**Next implementation authority:** `completion road map.md`, updated to match this re-audit.
+## Findings
+
+- multiple API helper/transport implementations remain;
+- production-capable code contains localhost/empty API fallbacks;
+- localStorage is used for identity, profile, phone verification, KYC, wallet compatibility, bets, rounds, settlement and game history;
+- duplicate profile/proof/verification business logic exists;
+- static lobby configuration can diverge from backend admin configuration;
+- backend-authoritative data is not consistently treated as authoritative by contexts/services;
+- frontend automated test infrastructure is insufficient.
+
+---
+
+# 21. Dead/duplicate/legacy code audit
+
+Cleanup candidates, only after dependency verification:
+
+- simulated phone OTP service;
+- simulated document verification service;
+- local KYC submission fallback;
+- local KYC progress/image storage;
+- duplicate profile business logic;
+- duplicate API transports;
+- local wallet/game/bet/settlement authority;
+- legacy `main` wallet support;
+- duplicate KYC status mutation paths;
+- static lobby configuration where backend configuration is authoritative;
+- obsolete/manual Football prediction paths conflicting with automatic AI;
+- process-local critical event callbacks after durable event migration;
+- stale feature flags/configuration;
+- dead services/components/routes discovered by dependency analysis.
+
+No deletion should occur until references and runtime dependencies are verified.
+
+---
+
+# 22. Testing and production-proof audit
+
+## Current state
+
+Frontend `package.json` has no automated test script. Backend has build/typecheck capability but the repository does not provide sufficient automated evidence for the complete platform lifecycle.
+
+## Required final verification
+
+### Identity/security
+
+- registration;
+- email verification;
+- login;
+- refresh/revocation;
+- password reset/change;
+- 2FA;
+- PIN;
+- phone OTP;
+- suspension/deactivation;
+- public identity/profile synchronization.
+
+### KYC
+
+- upload/ownership;
+- document replacement;
+- real verification/manual review;
+- approve/reject;
+- address lock;
+- resubmission;
+- storage/access/retention;
+- privileged admin controls.
+
+### Financial
+
+- deposits;
+- withdrawals;
+- transfers;
+- fees;
+- limits;
+- ledger reconciliation;
+- webhook idempotency;
+- concurrent debits/credits;
+- admin wallet operations.
+
+### Games
+
+Every game under normal, concurrent, timeout, duplicate-request and restart conditions.
+
+### Football AI
+
+Multiple simulated days, provider failure, quota, VIP gating and midnight rollover.
+
+### Auctions
+
+Create, bid, outbid, close, winner, settlement, claim and restart recovery.
+
+### Growth/rewards
+
+Referral, affiliate, ambassador, promotions, challenges and exactly-once rewards.
+
+### Admin
+
+Every admin route must be tested against every role for allow/deny behavior and privileged mutations.
+
+---
+
+# 23. Final readiness matrix
+
+| Domain | Implementation exists | Major issue(s) | Production-proven |
+|---|---|---|---|
+| Registration | Yes | identity/attribution/phone | No |
+| Login | Yes | E2E/security proof | No |
+| Email verification | Yes | E2E/rate/replay proof | No |
+| Phone verification | Partial | simulated/client-authoritative | **No — P0** |
+| Profile/Identity | Yes | localStorage authority/duplicate paths | **No — P0/P1** |
+| Public user ID | Partial | UUID not separated | No |
+| KYC | Yes | fake/unfinished provider + storage | **No — P0** |
+| VIP | Yes | KYC status mismatch + phone gate | **No — P0** |
+| Tasks | Yes | edit/review/proof E2E | No |
+| Colour Prediction | Yes | lifecycle/accounting | No |
+| Coin Flip | Yes | concurrency/fairness proof | No |
+| Dice Clash | Yes | concurrency/fairness proof | No |
+| Dice Royale | Yes | join/rule lifecycle | No |
+| Dice Arena | Yes | join/countdown/settlement | No |
+| Spin Battle | Yes | stake-weighted winner | **No — P0** |
+| Reaction Tap | Yes | E2E/anti-abuse | No |
+| Provably Fair | Yes | multiplayer verification | No |
+| Football AI | Yes | automatic pipeline/timezone/quota | No |
+| Auctions | Yes | lifecycle/settlement | No |
+| Referral | Yes | attribution/idempotency | No |
+| Affiliate | Yes | lineage/commission proof | No |
+| Ambassador | Yes | lifecycle/distribution proof | No |
+| Wallet | Yes | Float/legacy main/escrow | **No — P0/P1** |
+| Deposits | Yes | provider/reconciliation | No |
+| Withdrawals | Yes | provider/state/reconciliation | No |
+| Promotions | Yes | scheduler/reward proof | No |
+| Challenges | Yes | lifecycle/reward proof | No |
+| Notifications | Yes | durable events | No |
+| Settings | Yes | authority/security propagation | No |
+| Translation | Yes | complete coverage/drift | No |
+| Admin Users | Yes | role escalation | **No — P0** |
+| Admin KYC | Yes | direct status override/storage | **No — P0** |
+| Admin Financial | Yes | authorization/reconciliation | No |
+| Admin Games | Yes | config/runtime/history | No |
+| Admin Tasks | Yes | workflow enforcement | No |
+| Admin VIP | Yes | custom grant missing | No |
+| Admin Football/AI | Yes | monitor-first policy proof | No |
+| Admin Auctions | Yes | settlement proof | No |
+| Admin Security/Audit | Yes | event completeness/durability | No |
+| Admin Developer Center | Yes | safe patch lifecycle | No |
+| Production infrastructure | Partial | RLS/storage/jobs/recovery | No |
+| Automated testing | Insufficient | full unit/integration/E2E | No |
+
+---
+
+# 24. Immediate priority order
+
+## P0 security/integrity blockers
+
+1. Build real server-side phone verification and remove client-controlled `phoneVerified`.
+2. Normalize KYC status vocabulary and fix all cross-module status contracts.
+3. Enforce KYC + phone verification for VIP and all dependent privileged features.
+4. Remove fake/local KYC verification authority and local sensitive KYC fallback.
+5. Implement secure production KYC document storage/access and durable verification processing.
+6. Restrict role changes to explicit Super Admin-only permission and prevent privilege escalation.
+7. Remove generic direct KYC status mutation or make it an explicit Super Admin-only audited override.
+8. Replace Float monetary storage/calculation with exact financial representation.
+9. Remove localStorage as authentication/identity/verification/financial/game authority.
+10. Correct Spin Battle to stake-proportional winner selection with independently verifiable fairness.
+11. Verify/enforce Supabase RLS before production financial/identity use.
+
+## P1 completion blockers
+
+After P0 blockers, execute every phase in the updated completion roadmap and require implementation + tests + E2E + concurrency/failure testing + production configuration verification before sign-off.
+
+---
+
+# 25. Audit conclusion
+
+BitZimi has substantial real implementation across the main platform and Admin Panel, but it is **not yet 100% production-ready**.
+
+The previous audit was incomplete because it did not sufficiently examine the entire identity and verification foundation or the complete Admin Panel privilege model. This re-audit corrects that gap.
+
+The most important newly identified blockers are:
+
+- simulated/client-authoritative phone verification;
+- incomplete/fake KYC verification and production storage;
+- KYC status contract mismatch that can block VIP;
+- missing phone enforcement for VIP/task-dependent access;
+- admin role escalation through generic user edit;
+- unrestricted admin KYC status mutation;
+- Float-based monetary accounting;
+- sensitive KYC information stored in browser localStorage;
+- incomplete durable processing/audit/storage infrastructure.
+
+The completion roadmap must therefore treat **Identity + Authentication + Phone Verification + KYC + Profile** as foundational work before dependent privileges, followed by the domain lifecycles, financial integrity, complete Admin Panel hardening, infrastructure resilience, cleanup and final automated/E2E production sign-off.
+
+**No phase is complete merely because the code compiles.**
