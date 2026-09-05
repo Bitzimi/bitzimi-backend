@@ -1,7 +1,7 @@
 # BitZimi — Completion Roadmap
 
 **Updated:** 2026-09-05  
-**Based on:** `audit report.md` full-platform re-audit  
+**Based on:** `audit report.md` full-platform re-audit and subsequent business-rule corrections  
 **Purpose:** Master implementation sequence for making the entire BitZimi user platform and entire Admin Panel complete, secure, consistent, testable and production-ready.
 
 ---
@@ -11,22 +11,64 @@
 1. Read the existing frontend, backend, Prisma schema/migrations and relevant Admin Panel code before changing anything.
 2. Preserve established BitZimi business rules; do not redesign working architecture without a demonstrated reason.
 3. Backend is authoritative for identity, verification, permissions, balances, game state, rewards, commissions and settlements.
-4. Never use localStorage as authority for authentication, KYC/phone verification, balances, bets, settlements, rewards or game outcomes.
+4. Never use localStorage as authority for authentication, phone/KYC verification, balances, bets, settlements, rewards or game outcomes.
 5. Do not add a second implementation when an existing authoritative implementation can be corrected.
 6. Remove dead/duplicate code only after repository-wide dependency verification.
-7. Any financial, security, identity, KYC or privileged-admin mutation must be atomic where appropriate, idempotent and auditable.
+7. Financial, security, identity, KYC or privileged-admin mutations must be atomic where appropriate, idempotent and auditable.
 8. Scheduled/background work must be durable and restart-safe where it affects business state.
-9. Every API contract changed in backend must be reconciled with frontend callers.
-10. Every phase ends with: **build/typecheck → unit/integration tests → E2E → concurrency/failure testing where applicable → verify → fix → verify again.**
+9. Every changed backend API contract must be reconciled with frontend callers.
+10. Every phase ends with **build/typecheck → unit/integration tests → E2E → concurrency/failure testing where applicable → verify → fix → verify again.**
 11. A phase is not complete merely because TypeScript compiles.
-12. Production sign-off requires live configuration verification for Supabase, Render, Vercel, storage, payment providers, SMS/email providers and other external dependencies.
+12. Production sign-off requires live configuration verification for Supabase, Render, Vercel, storage, payment providers, SMS/email providers, Didit and other external dependencies.
+
+---
+
+# 2. Canonical Identity, Phone, KYC & VIP Rules
+
+These rules override ambiguous or incorrect wording elsewhere in the roadmap.
+
+### Phone verification
+- Phone verification is an independent account/security feature.
+- A user may verify their phone without completing KYC and without becoming VIP.
+- Phone verification is required when entering protected flows that explicitly require it, including KYC and withdrawal.
+- When a protected flow requires phone verification and the phone is not verified, the system automatically opens the existing phone-verification flow first.
+- After successful verification, the original flow continues automatically.
+- If the phone is already verified, the user proceeds without seeing the phone-verification step again.
+- Phone verification is persistent account state, not a recurring requirement on every withdrawal/KYC attempt.
+- The backend, not the client, determines whether the phone is verified.
+
+### KYC
+- KYC is a separate verification process.
+- Starting KYC checks phone verification first; it does not grant VIP.
+- If phone is not verified, the Verify Account flow automatically takes the user through phone verification before KYC can continue.
+- If phone is already verified, KYC proceeds normally.
+- The existing BitZimi KYC experience remains the user-facing foundation.
+- Didit is integrated into that existing KYC flow as an additional authoritative identity-verification layer, rather than replacing the current BitZimi KYC experience.
+- Final KYC verification requires the applicable BitZimi requirements **and** the required Didit verification result to pass.
+- Didit requirements/API capabilities must be verified against the current supported Didit offering before implementation; do not invent unsupported requirements.
+- Successful KYC status is `verified`.
+
+### VIP
+- KYC verification does not automatically make a user VIP.
+- A user can be phone-verified and KYC-verified while remaining a non-VIP user.
+- VIP requires KYC `verified` status as eligibility.
+- The user must separately subscribe to VIP or receive an authorized administrative VIP grant.
+- Phone verification is **not an independent VIP requirement**; it is already enforced as a prerequisite of KYC.
+- Therefore the logical dependency is:
+  **Phone Verified → KYC process (BitZimi + Didit) → KYC Verified → VIP eligibility → VIP subscription/grant → VIP user.**
+
+### Withdrawal
+- Withdrawal checks phone verification when the user clicks Withdraw.
+- If already verified, continue directly to the normal withdrawal process.
+- If not verified, automatically open phone verification, then continue to withdrawal after success.
+- Do not repeatedly ask a user to verify a phone number that is already verified.
 
 ---
 
 # Phase 1 — Identity, Authentication, Phone Verification & Profile Foundation
 
 ## Objective
-Establish one trustworthy identity source and make account authentication/phone verification secure before dependent privileges are completed.
+Establish one trustworthy identity source and secure account authentication and phone verification.
 
 ## Implement/fix
 
@@ -43,131 +85,139 @@ Establish one trustworthy identity source and make account authentication/phone 
 - Security PIN lifecycle.
 - Session/device state.
 
-### Phone verification — new critical work
+### Phone verification
 - Remove simulated frontend OTP service.
 - Remove client-generated OTP.
 - Remove OTP from browser console/response.
-- Add backend OTP challenge model/state.
+- Add backend OTP challenge/state.
 - Use cryptographically secure OTP generation.
 - Hash OTP/challenge secret where appropriate.
-- Add expiry.
-- Add attempt limits.
-- Add resend cooldown.
-- Add per-user/per-phone/per-IP rate limits.
-- Normalize phone numbers.
+- Expiry and attempt limits.
+- Resend cooldown.
+- Per-user/per-phone/per-IP rate limits.
+- Phone normalization.
 - Integrate the selected real SMS provider.
 - Verify OTP entirely on backend.
 - Store verified timestamp.
 - Invalidate previous OTPs after successful verification.
-- Prevent client from submitting `phoneVerified=true` directly.
-- Require re-verification for controlled phone-number changes.
-- Add audit events for privileged phone verification changes.
+- Prevent client from submitting `phoneVerified=true`.
+- Controlled re-verification when changing a verified phone number.
+- Audit privileged phone-verification changes.
+- Make protected-flow interception reusable by KYC and withdrawal without duplicating verification logic.
 
 ### Identity/profile
 - Make `/users/me` the authoritative identity source.
 - Refactor IdentityContext to bootstrap from backend.
-- Remove localStorage identity as source of truth.
+- Remove localStorage identity as authority.
 - Synchronize username/full name/avatar/phone/KYC/VIP/role/permissions from backend.
 - Remove duplicate profile business rules.
-- Fix username cooldown bypass in `updateMe()`.
+- Fix username cooldown bypass.
 - Keep username uniqueness database-safe.
-- Introduce a short public user ID if required while preserving internal UUID primary keys.
+- Introduce a short public user ID where needed while preserving internal UUIDs.
 - Stop exposing internal UUIDs where public identity is intended.
 - Ensure suspended/deleted accounts are rejected by every business API.
-- Verify all issued sessions after suspension/deactivation.
+- Verify issued sessions after suspension/deactivation.
 
 ## Admin
-- Harden AdminRouteGuard and frontend route-level permissions.
-- Separate generic user editing from privileged role/security operations.
+- Harden AdminRouteGuard and route-level permissions.
+- Separate ordinary user editing from privileged role/security operations.
 - Create explicit Super Admin-only role-management permission.
 - Add mandatory audit for role changes.
-- Restrict admin security actions such as disabling 2FA/clearing PIN to dedicated permissions.
+- Restrict security actions such as disabling 2FA/clearing PIN to dedicated permissions.
 
 ## Completion gate
-A new account can register, verify email, log in, complete real phone OTP verification, enable/disable 2FA/PIN, update profile, refresh/logout, and become suspended/deactivated without any local browser value being able to forge its authoritative identity.
+A user can register, verify email, log in, securely verify a phone, manage profile/security state, refresh/logout and be suspended/deactivated without any browser value forging authoritative identity or phone-verification state.
 
 ---
 
-# Phase 2 — KYC / Identity Verification & Sensitive Document System
+# Phase 2 — KYC / Identity Verification, Didit Integration & Sensitive Document System
 
 ## Objective
-Make identity verification real, durable, secure and consistent with phone verification.
+Complete the existing BitZimi KYC experience and connect it to Didit so final KYC verification is authoritative, durable and secure.
 
 ## User flow
-- Backend-enforced phone verification prerequisite.
-- Country/ID-type selection from authoritative backend catalog.
-- Personal information validation.
-- Capture/store required ID number.
+- Verify phone automatically when entering KYC if not already verified.
+- If already phone verified, skip that step and continue directly to KYC.
+- Preserve the current BitZimi KYC user experience and fields where still valid.
+- Use authoritative country/ID-type configuration.
+- Collect the identity information required by the final BitZimi + Didit flow.
 - Document uploads.
-- Selfie.
-- Proof of address.
+- Selfie/face verification as supported by Didit.
+- Proof of address where required by the selected verification policy/provider.
 - Submission/review state.
-- Resubmission after rejection.
-- Status polling/refresh from backend.
+- Rejection and safe resubmission.
+- Backend status polling/refresh.
 - No local fallback submission.
 - No sensitive image/form persistence in localStorage.
 
-## Verification engine
-- Remove fake frontend face/OCR verification authority.
-- Keep frontend validation UX-only.
-- Implement the selected real identity provider or explicitly operate a controlled manual-review production model until automated verification is available.
-- If automated verification is used, implement real face/document/address checks.
-- Define thresholds and evidence rules server-side.
-- Never enable mock verification in production.
-- Store verification decision/evidence version.
+## Didit integration
+- Verify current Didit API/product requirements before implementation.
+- Integrate the current supported Didit verification flow into the existing BitZimi KYC process.
+- Pass only required/allowed data to Didit.
+- Receive and validate Didit verification results through a secure server-to-server flow/webhook where supported.
+- Verify webhook authenticity/signatures according to Didit documentation.
+- Persist Didit verification/session identifiers and decision evidence required for audit.
+- Make Didit callbacks idempotent and replay-safe.
+- Do not treat frontend Didit/client callbacks as authoritative.
+- Do not invent a separate custom ID-number requirement merely because the existing UI contains one.
+- If BitZimi currently collects an ID number, reconcile it with the authoritative Didit-supported identity data rather than maintaining an ad-hoc parallel verification authority.
 
-## Storage
+## Final KYC decision
+- Final KYC status becomes `verified` only when the required BitZimi checks and required Didit verification have passed.
+- KYC verification never creates VIP membership automatically.
+- Standardize all success-state contracts on `verified`.
+- Remove `approved`/`verified` mismatch.
+- Centralize allowed KYC status transitions.
+
+## Storage/security
 - Replace local filesystem as production KYC storage.
-- Implement private object storage.
-- Implement upload ownership binding.
-- Implement short-lived signed document access.
-- Add MIME/content validation.
-- Add size limits.
-- Add malicious-file/content controls where applicable.
-- Add retention/deletion policy.
-- Safely delete/retain superseded documents according to policy.
+- Use private object storage.
+- Bind uploads to the correct user/KYC submission.
+- Short-lived signed access for authorized reviewers.
+- MIME/content validation.
+- Size limits.
+- Malicious-file/content controls where applicable.
+- Retention/deletion policy.
+- Secure handling of superseded documents.
 - Audit sensitive document access.
 
 ## Processing
-- Replace `setImmediate()` verification processing with durable job/outbox/queue processing.
-- Add idempotency.
-- Add retry/dead-letter behavior.
-- Make verification restart-safe.
-
-## Status consistency
-- Standardize on one successful status, e.g. `verified`.
-- Remove `approved`/`verified` contract mismatch.
-- Centralize allowed status transitions.
+- Replace process-local `setImmediate()` verification processing with durable jobs/outbox/queue processing.
+- Idempotency.
+- Retry/dead-letter behavior.
+- Restart-safe processing.
 
 ## Admin KYC
 - Queue.
 - Detail.
 - Secure document viewing.
-- Approve/reject.
+- Approve/reject according to the final provider/manual-review workflow.
 - Mandatory rejection reason.
 - Atomic profile/name/address-lock synchronization.
-- Controlled Super Admin override only.
+- Super Admin-only manual override where permitted.
 - Immutable review audit record.
 - Reviewer identity/time/version.
 
 ## Completion gate
-A real user submits valid/invalid identity documents; backend stores them securely, verification/manual review produces a durable decision, profile/address state synchronizes atomically, rejected users can safely resubmit, and no client/localStorage manipulation can create verified KYC.
+A user who has not verified a phone is automatically routed through phone verification before KYC; a user who has already verified the phone proceeds directly to KYC; valid BitZimi + Didit verification produces durable KYC `verified`; KYC rejection can be resubmitted; and no client/localStorage manipulation can create verified KYC.
 
 ---
 
 # Phase 3 — VIP Eligibility, Subscription, Streaks & Grants
 
 ## Objective
-Make the single VIP system obey the corrected identity prerequisites and all administrative requirements.
+Make the single VIP system obey the corrected KYC dependency without incorrectly making phone verification a direct VIP requirement.
 
 ## Implement/fix
 - One unified VIP subscription.
-- Require KYC `verified` status.
-- Require phone verification.
-- Require active/valid subscription state.
+- Require KYC `verified` status for normal VIP subscription eligibility.
+- Do **not** add a separate phone-verification gate to VIP; verified KYC is the authoritative prerequisite.
+- KYC verification does not activate VIP.
+- User must separately subscribe to VIP.
+- Require active/valid subscription state for VIP membership.
 - Correct all status vocabulary.
 - Prevent direct client VIP claims.
-- VIP task creation eligibility.
+- VIP task-creation eligibility.
 - VIP Football AI eligibility.
 - Other configured VIP features.
 - Subscription payment lifecycle.
@@ -181,46 +231,47 @@ Make the single VIP system obey the corrected identity prerequisites and all adm
 
 ## Admin
 - VIP member list/detail.
-- Award VIP manually.
+- Authorized VIP grants.
 - Custom durations: 1 week, 2 weeks, 1 month, 3 months, 1 year.
 - Cancel VIP.
 - Reset streak.
 - Audit every grant/cancel/reset.
-- Super Admin-only actions where required.
+- Super Admin-only privileged actions where required.
 
 ## Completion gate
-A user cannot become normally VIP without phone + KYC; VIP purchase, renewal, streak and admin custom grants all produce correct authoritative state and audit records.
+A phone-verified/KYC-verified user remains non-VIP until subscribing or receiving an authorized grant; VIP status is authoritative, durable and correctly expires/cancels.
 
 ---
 
 # Phase 4 — Task Marketplace, Task Creator, My Task & Proof System
 
 ## Objective
-Complete the entire task lifecycle after the identity/VIP foundation is reliable.
+Complete the entire task lifecycle using authoritative VIP eligibility.
 
 ## Implement/fix
 - VIP-only task creation.
-- Revalidate phone + KYC + active VIP on server.
+- Revalidate active VIP and KYC `verified` status on server.
+- Do not add a redundant direct phone requirement when valid KYC is already authoritative.
 - Task Wallet funding.
 - Full budget moved into Task Vault before review.
 - Pending review.
 - Admin approval/rejection.
-- Rejection refunds remaining escrow.
+- Rejection returns remaining escrow.
 - Active task keeps remaining escrow locked.
 - Completion deducts exactly the configured reward.
 - Free 35% / Verified 45% / VIP 65% reward tiers.
 - Platform revenue calculation.
 - Pause without refund.
 - Resume without resetting budget.
-- Stop/cancel and refund remaining escrow.
+- Stop/cancel and return remaining escrow.
 - Edit after partial completion preserves spent/remaining amounts.
 - Edited task automatically returns to pending review.
 - Creator cannot manipulate protected workflow status.
 - Task expiration.
-- Task completion ownership.
+- Completion ownership.
 - Duplicate proof prevention.
 - AI-first proof verification.
-- Manual admin review for uncertain proofs.
+- Uncertain proof → admin manual review.
 - Exactly-once reward settlement.
 - Creator My Task/Task Manager.
 - Marketplace filtering/listing/detail.
@@ -238,7 +289,7 @@ Complete the entire task lifecycle after the identity/VIP foundation is reliable
 - Remove obsolete task update paths.
 - Remove duplicate proof authority.
 - Remove local proof authority.
-- Use secure production storage for task reference/proof documents.
+- Secure production storage for task reference/proof documents.
 
 ## Completion gate
 Creator funding → review → publication → edit/re-review → pause/resume/stop and completer proof/reward all reconcile exactly under concurrent requests.
@@ -248,10 +299,10 @@ Creator funding → review → publication → edit/re-review → pause/resume/s
 # Phase 5 — Complete Games Center & Provably Fair
 
 ## Objective
-Make every game fully functional, authoritative, concurrency-safe and independently verifiable.
+Make all seven user-facing game areas fully functional, authoritative, concurrency-safe and independently verifiable.
 
 ## Shared foundation
-- Backend authoritative game state.
+- Backend-authoritative game state.
 - Persistent/restart-safe rounds.
 - Matchmaking/private room correctness.
 - Duplicate join prevention.
@@ -269,11 +320,11 @@ Make every game fully functional, authoritative, concurrency-safe and independen
 - Red/Blue multiplayer.
 - Correct countdown/lock/spin/result/settlement.
 - Correct fee/accounting model.
-- Daily displayed round resets at midnight.
-- Global underlying round ID remains continuous.
-- Backend/admin lobby configuration.
+- Displayed round resets at midnight.
+- Underlying/global round ID remains continuous.
+- Backend/admin configuration.
 
-## Coin Flip
+## PvP Coin Flip
 - 1v1 matchmaking.
 - Private match.
 - Stake selection.
@@ -282,14 +333,15 @@ Make every game fully functional, authoritative, concurrency-safe and independen
 - Timeout/cancellation.
 - Provably Fair.
 
-## Dice Clash
+## Dice Duel category
+### Dice Clash
 - 1v1 matchmaking/private match.
 - Stakes.
 - Tie handling.
 - Settlement.
 - Provably Fair.
 
-## Dice Royale
+### Dice Royale
 - Max 6.
 - First player waits.
 - Second player triggers 30-second countdown.
@@ -301,7 +353,7 @@ Make every game fully functional, authoritative, concurrency-safe and independen
 - Provably Fair.
 - Correct frontend copy.
 
-## Dice Arena
+### Dice Arena
 - Max 6.
 - First/second waiting behavior.
 - Third player triggers 30-second countdown.
@@ -315,7 +367,7 @@ Make every game fully functional, authoritative, concurrency-safe and independen
 - Max 12.
 - Second player triggers 30-second countdown.
 - Lock at 5 seconds.
-- **Stake-proportional winner probability.**
+- Stake-proportional winner probability.
 - Correct wheel segment weighting.
 - Correct fee/settlement.
 - Provably Fair verification of weighted result.
@@ -345,7 +397,7 @@ Make every game fully functional, authoritative, concurrency-safe and independen
 - Historical-result immutability.
 
 ## Completion gate
-All seven games work under normal, concurrent, timeout, duplicate-request and restart scenarios; applicable games have complete usable fairness verification.
+All seven game areas work under normal, concurrent, timeout, duplicate-request and restart scenarios; applicable games have complete usable fairness verification.
 
 ---
 
@@ -362,8 +414,8 @@ Make Football AI fully automatic, correctly gated and schedule-safe.
 - Automatic prediction generation.
 - Daily configured prediction volume.
 - Free exactly 2 games/day.
-- Unified VIP gating.
-- VIP-only categories.
+- Unified VIP gating based on active VIP status/KYC eligibility.
+- VIP-only categories where configured.
 - Tomorrow preparation.
 - 00:00 publication boundary.
 - Automatic next-day preparation.
@@ -374,6 +426,7 @@ Make Football AI fully automatic, correctly gated and schedule-safe.
 - Retry/idempotency.
 - Automatic Football Hub points on entry.
 - Duplicate point prevention.
+- No manual prediction creation as the normal operating model.
 
 ## Admin
 - Separate Football AI area.
@@ -385,10 +438,10 @@ Make Football AI fully automatic, correctly gated and schedule-safe.
 - Prediction/result monitoring.
 - Configuration.
 - Learning/analysis visibility.
-- Ensure admin controls do not contradict monitor-first automatic prediction requirements.
+- Admin controls must not contradict automatic prediction generation.
 
 ## Completion gate
-Run several simulated days including provider failures and midnight rollover; quotas, VIP access and automatic prediction publishing remain correct without manual prediction creation.
+Simulated days including provider failures and midnight rollover preserve quotas, VIP access and automatic prediction publishing without manual prediction creation.
 
 ---
 
@@ -458,7 +511,7 @@ Attribution remains correct from registration through qualifying activity and ev
 # Phase 9 — Wallet, Ledger & Complete Financial System
 
 ## Objective
-Correct financial representation and reconcile every money-moving feature.
+Correct financial representation and reconcile every money-moving feature, including the withdrawal phone-verification gate.
 
 ## Data model
 - Replace Float monetary fields with exact financial representation.
@@ -466,7 +519,7 @@ Correct financial representation and reconcile every money-moving feature.
 - Remove legacy `main` wallet.
 - Maintain Game/Task/Referral/Affiliate/Ambassador spendable balances.
 - Separate Task Vault conceptually and operationally from spendable wallet.
-- Add required database constraints/indexes.
+- Add required constraints/indexes.
 
 ## Financial lifecycle
 - Atomic debit/credit.
@@ -491,6 +544,14 @@ Correct financial representation and reconcile every money-moving feature.
 - Promotion/reward settlement.
 - Referral/affiliate/ambassador settlement.
 
+## Withdrawal phone gate
+- When user clicks Withdraw, check authoritative phone-verification state.
+- If verified, continue directly to normal withdrawal.
+- If not verified, automatically open phone verification first.
+- After successful verification, continue automatically to the normal withdrawal flow.
+- Never ask again merely because another withdrawal is being started when the phone remains verified.
+- Keep this gate reusable and independent from KYC/VIP logic.
+
 ## Admin
 - Wallet dashboard/explorer.
 - Credit/debit.
@@ -502,7 +563,7 @@ Correct financial representation and reconcile every money-moving feature.
 - Mandatory reason/audit for privileged adjustments.
 
 ## Completion gate
-Wallet balances and ledger reconcile exactly across every domain under concurrent operations, with no binary floating-point accounting and no spendable Task Vault/main wallet contamination.
+Wallet balances and ledger reconcile exactly across every domain under concurrent operations, with no binary floating-point accounting and no spendable Task Vault/main wallet contamination; withdrawal phone gating behaves exactly once per verified phone state.
 
 ---
 
@@ -541,7 +602,7 @@ Scheduled promotions/challenges run across restarts without duplicate activation
 # Phase 11 — Complete Admin Panel Functionalization & Least-Privilege Hardening
 
 ## Objective
-Audit and finish every Admin Panel surface, not merely the navigation.
+Audit and finish every Admin Panel surface, not merely the navigation, with strict server-side privilege boundaries.
 
 ## Admin domains
 
@@ -552,353 +613,271 @@ Audit and finish every Admin Panel surface, not merely the navigation.
 - Cross-domain consistency.
 
 ### Users
-- Search/pagination.
-- User detail.
-- Profile edits.
-- Suspension.
-- Deactivation visibility.
-- Verification visibility.
-- VIP visibility.
-- Security visibility.
-- Financial visibility.
-- Strict field masking.
+- Search/filter/detail.
+- Suspend/unsuspend.
+- Account controls.
+- Profile/security management.
+- Ordinary user management.
+- No privileged role changes by normal Admins.
 
-### KYC
-- Queue/detail.
-- Approve/reject.
-- Super Admin override.
-- Document access.
-- Audit.
+### Role hierarchy — mandatory
+- Super Admin is the highest privileged role.
+- **Only Super Admin can add/promote another Admin.**
+- **Only Super Admin can change privileged user roles.**
+- Normal Admins may manage ordinary users but cannot promote a user to Admin or Super Admin.
+- Normal Admins cannot demote, promote or otherwise modify privileged roles.
+- Frontend role controls must reflect these permissions, but backend authorization is the final enforcement point.
+- Role changes require dedicated permission checks and immutable audit records.
+- Generic user-edit endpoints must not provide a route around Super Admin-only role management.
 
-### Financial
+### KYC/Security
+- KYC queue/detail/review.
+- Secure document access.
+- Verification override controls according to privilege.
+- Phone/security controls.
+- 2FA/PIN administration.
+- Audit trail.
+
+### Financials/Wallet
 - Deposits.
 - Withdrawals.
-- Transactions.
-- Wallets.
-- Reconciliation.
+- Wallet explorer.
+- Ledger/reconciliation.
+- Privileged adjustment controls.
 
-### Tasks
-- Pending.
-- Marketplace.
-- Detail.
+### Tasks/Proofs
+- Task review.
 - Proof review.
-- Correct transition permissions.
+- Creator/task monitoring.
+- Reward/rejection controls.
 
 ### Games
-- Per-game config.
-- Lobbies/stakes.
-- Monitoring.
-- Moderation.
-- Immutable historical results.
-
-### VIP
-- Members.
-- Custom-duration grants.
-- Cancel/reset.
-- Audit.
-
-### Referral/Affiliate/Ambassador
-- Applications.
-- Approvals.
-- Attribution.
-- Commissions.
-- Pool/reward management.
-
-### Football/AI
-- Monitor automatic AI pipeline.
-- Provider health.
-- Queue.
-- Predictions/results.
-- Diagnostics.
-- Avoid inappropriate manual prediction paths.
-
-### Auctions
-- Full lifecycle controls.
-
-### Promotions/Challenges
-- Full lifecycle/rewards.
-
-### Notifications/Content/Pages/Text
-- CRUD.
-- Permissions.
-- Audit.
-- Translation linkage.
-
-### Security/Audit/Compliance
-- Login history.
-- Sessions.
-- Security events.
-- Fraud alerts.
-- IP controls.
-- Compliance.
-- Audit log.
-- Complete event coverage.
-
-### Configuration
-- System settings.
-- Features.
-- Currency.
-- Languages.
-- Translations.
-- Branding.
-- Explicit precedence and permissions.
-
-### AI Developer Center
-- Scan.
-- Issue lifecycle.
-- Patch proposal.
-- Approval.
-- Verification.
-- Rollback.
-- Strict privileged permissions.
-
-## Permission matrix
-Create and test a route/action matrix for:
-- super_admin;
-- finance_admin;
-- support_admin;
-- moderator_admin;
-- normal user.
-
-Explicitly protect role changes, KYC overrides, wallet adjustments, security overrides, configuration changes and code-changing AI actions.
-
-## Completion gate
-Every Admin Panel route and mutation is reachable only by the correct role/permission, and every sensitive mutation is auditable.
-
----
-
-# Phase 12 — Translation, Language, Currency, Branding & Platform Content
-
-## Implement/fix
-- Single authoritative language catalog.
-- Single authoritative currency catalog.
-- Translation-key coverage across the entire user platform and Admin Panel.
-- Remove hardcoded strings that should be catalog-backed.
-- Missing-key fallback.
-- Runtime language propagation.
-- Runtime currency propagation.
-- Admin editing.
-- Cache invalidation/refresh.
-- Branding propagation.
-- Static pages/content propagation.
-- Consistent notification templates.
-
-## Completion gate
-Changing a supported language/currency in Admin or user settings propagates consistently without stale frontend constants or missing critical text.
-
----
-
-# Phase 13 — Database, Supabase RLS, Security, Storage & Runtime Resilience
-
-## Database
-- Verify Supabase RLS on every exposed table.
-- Add/fix indexes.
-- Add foreign-key constraints where needed.
-- Add uniqueness/check constraints.
-- Verify migrations against production schema.
-- Remove legacy schema only after data migration verification.
-
-## Security
-- Least privilege.
-- Rate limits.
-- CORS.
-- Helmet.
-- Token/session security.
-- XSS/storage review.
-- Sensitive-data masking.
-- Document access controls.
-- Admin authorization.
-- Audit coverage.
-
-## Runtime
-Replace critical process-local mechanisms with durable primitives where necessary:
-- KYC verification jobs;
-- notifications;
-- audit events;
-- commissions;
-- Football AI;
-- auctions;
-- promotions;
-- game coordination/state;
-- cleanup/retention jobs.
-
-Test:
-- Render restart;
-- process crash;
-- multi-instance execution;
-- duplicate worker execution;
-- network/provider failure;
-- database transient failure;
-- job retry.
-
-## Production configuration
-- Render environment variables.
-- Vercel API configuration.
-- Supabase production schema/RLS.
-- Private storage.
-- SMS provider.
-- Email provider.
-- Payment providers.
-- Football providers.
-- AI provider/configuration.
-
-## Completion gate
-The platform remains correct after restarts, retries, concurrent workers and provider/database failures, with live RLS/security/storage/configuration verified.
-
----
-
-# Phase 14 — Dead Code Removal, Consolidation, Automated Testing & Final Sign-Off
-
-## Cleanup
-Only after all preceding phases are stable:
-
-- remove simulated phone OTP;
-- remove fake document verification;
-- remove local KYC submission fallback;
-- remove local KYC image/form persistence;
-- remove duplicate identity/profile authority;
-- remove duplicate API transports;
-- remove local financial/game authority;
-- remove legacy `main` wallet;
-- remove duplicate KYC status mutation paths;
-- remove stale static lobby configuration;
-- remove obsolete/manual Football prediction paths where superseded;
-- remove obsolete process-local callbacks after durable replacements exist;
-- remove dead routes/services/components/hooks;
-- remove obsolete feature flags/config only after dependency verification.
-
-## Automated testing
-Build complete backend/frontend test suites covering:
-
-### Identity/security
-- registration;
-- email verification;
-- login;
-- refresh/logout;
-- password reset/change;
-- phone OTP;
-- 2FA;
-- PIN;
-- suspension/deactivation;
-- profile/public ID.
-
-### KYC
-- upload;
-- ownership;
-- verification/manual review;
-- approval/rejection;
-- resubmission;
-- address locking;
-- storage access;
-- retention.
-
-### Financial
-- wallet;
-- ledger;
-- deposit;
-- withdrawal;
-- transfers;
-- fees;
-- limits;
-- webhooks;
-- reconciliation;
-- concurrent money operations.
-
-### Tasks
-- creation;
-- review;
-- edit/re-review;
-- pause/resume/stop;
-- proof AI/manual;
-- exact reward settlement.
-
-### Games
-All seven games, matchmaking/private rooms, lobbies, timers, locks, settlement, fairness, concurrency and restart recovery.
+- Per-game configuration.
+- Lobbies.
+- Stakes.
+- Fees.
+- Monitoring/moderation.
+- Historical results.
+- Provably Fair administration.
 
 ### Football AI
-Multiple simulated days, quotas, VIP access, provider failure, rollover and points.
+- Provider health.
+- AI monitoring.
+- Prediction monitoring.
+- Configuration.
+- No ordinary admin control that contradicts automatic prediction generation.
 
 ### Auctions
-Create/bid/outbid/end/winner/settlement/claim/recovery.
+- Create/manage.
+- Bids.
+- Settlement/claim monitoring.
 
-### Growth/rewards
-Referral/affiliate/ambassador/promotions/challenges/notifications and exactly-once rewards.
+### VIP
+- Member management.
+- Grants.
+- Cancellations.
+- Streak administration.
+- Privileged actions.
 
-### Admin
-Every admin route/action against every role, including explicit negative authorization tests.
+### Referral/Affiliate/Ambassador
+- Attribution.
+- Approvals.
+- Commission monitoring.
+- Ambassador management.
 
-## Final production sign-off
-- Frontend production build.
-- Backend production build/typecheck.
-- Database migration verification.
-- Supabase RLS verification.
-- Render deployment verification.
-- Vercel deployment verification.
-- API contract verification.
-- Security review.
-- Performance/load smoke tests.
-- Restart/multi-instance tests.
-- Financial reconciliation.
-- Game fairness verification.
-- KYC/privacy review.
-- Admin permission matrix sign-off.
-- No open P0/P1 findings.
-- All critical flows demonstrated end-to-end.
+### Promotions/Events/Rewards
+- Full lifecycle management.
+- Reward monitoring.
+- Scheduling.
 
----
+### Notifications/Content/Translation
+- Broadcast.
+- Templates.
+- Content management.
+- Platform-wide translation/localization management without code changes.
 
-# 2. Final implementation order
+### Configuration/Features/Currency
+- Global configuration.
+- Feature flags.
+- Currency configuration.
+- Per-game settings.
+- Controlled rollout.
 
-**Phase 1 → Phase 2 → Phase 3 → Phase 4 → Phase 5 → Phase 6 → Phase 7 → Phase 8 → Phase 9 → Phase 10 → Phase 11 → Phase 12 → Phase 13 → Phase 14**
+### Audit/Security
+- Immutable audit records.
+- Authentication/security events.
+- Privileged actions.
+- Suspicious activity monitoring.
 
-The most important change from the previous roadmap is that **Identity + Authentication + Phone Verification + KYC now form the foundation**. This prevents us from completing dependent VIP, task and other privileged features on top of an identity/verification system that can still be forged or is not production-real.
+### AI Developer Center
+- Dashboard/health.
+- Repository scanning.
+- Issue detection.
+- Severity/confidence.
+- Auto-fix generation.
+- Admin review/approval.
+- Verification.
+- Rollback.
+- CI/CD/monitoring integrations.
 
----
-
-# 3. Audit finding coverage
-
-| Audit area | Roadmap phase |
-|---|---|
-| Phone OTP/client authority | 1 |
-| Authentication/session lifecycle | 1 |
-| Profile/IdentityContext/public ID | 1 |
-| KYC/identity verification | 2 |
-| KYC storage/provider/jobs | 2, 13 |
-| VIP eligibility/status/grants | 3 |
-| Task lifecycle/proofs | 4 |
-| Games/settlement | 5 |
-| Provably Fair | 5 |
-| Football AI | 6 |
-| Auctions | 7 |
-| Referral/Affiliate/Ambassador | 8 |
-| Wallet/ledger/Float/main wallet | 9 |
-| Promotions/challenges/notifications | 10 |
-| Entire Admin Panel | 11 |
-| Translation/language/currency/content | 12 |
-| RLS/security/storage/runtime | 13 |
-| Dead code/duplication | 14 |
-| Automated/E2E testing | 14 |
+## Completion gate
+Every Admin Panel route, action and mutation has a verified backend authorization path, every required domain is functional, privileged operations are separated from ordinary user management, and only Super Admin can change privileged roles.
 
 ---
 
-# 4. Definition of 100% complete
+# Phase 12 — Database, Security, Storage & Runtime Hardening
 
-BitZimi is considered complete only when:
+## Objective
+Remove structural production risks that cut across all platform features.
 
-- no P0/P1 audit findings remain;
-- identity is backend-authoritative;
-- phone verification is real and server-authoritative;
-- KYC is real, durable and secure;
-- VIP eligibility is correct;
-- every task/game/football/auction/growth/financial workflow works end-to-end;
-- all money uses exact accounting representation and reconciles;
-- Admin Panel permissions are least-privilege and complete;
-- all privileged actions are auditable;
-- scheduled work survives restart/retry/multi-instance execution;
-- frontend/backend contracts are consistent;
-- no critical localStorage authority remains;
-- no fake/simulated production verification remains;
-- no obsolete main-wallet/duplicate authority remains;
-- all critical flows have automated tests and E2E verification;
-- Supabase RLS and production infrastructure are live-verified;
-- production deployment has been tested, not merely built.
+## Database
+- Reconcile Prisma schema and migrations with Supabase.
+- Remove obsolete/duplicate models and fields only after dependency verification.
+- Add constraints/indexes/unique rules.
+- Enforce ownership and foreign keys.
+- Exact monetary types.
+- Durable idempotency records.
+- Audit records.
+- Safe migration strategy.
+
+## Security
+- Remove sensitive localStorage authority.
+- Review token storage/rotation strategy.
+- Protect all privileged APIs server-side.
+- Validate all ownership boundaries.
+- Prevent IDOR/internal UUID exposure.
+- Rate limits.
+- CSRF/CORS/security headers as applicable.
+- Input validation.
+- File-upload security.
+- Secrets/configuration hygiene.
+- Webhook authentication.
+- Audit security-sensitive mutations.
+
+## Runtime
+- Replace process-local timers/state for durable business workflows.
+- Durable workers/queues.
+- Retry/dead-letter strategy.
+- Graceful restart/recovery.
+- Health checks.
+- Observability.
+- Error handling.
+- Production-safe CORS/API configuration.
+- Remove localhost/empty API fallbacks from production paths.
+
+## Completion gate
+The platform survives restart, duplicate requests, provider failures and unauthorized requests without losing or fabricating business state.
+
+---
+
+# Phase 13 — Integration, E2E & Cross-Domain Verification
+
+## Objective
+Verify the whole platform as one connected system rather than testing isolated modules only.
+
+## Identity/KYC/VIP journeys
+- New user registration.
+- Email verification.
+- Phone verification independently.
+- Verify Account with unverified phone → phone verification → KYC → Didit → KYC verified.
+- Verify Account with already verified phone → direct KYC.
+- KYC verified user remains non-VIP until subscription/grant.
+- VIP subscription after KYC.
+- VIP expiry/cancellation.
+- Withdrawal with unverified phone → phone verification → withdrawal.
+- Withdrawal with already verified phone → direct withdrawal.
+
+## Core platform journeys
+- Task creation/funding/review/completion/refund.
+- All seven game flows.
+- Provably Fair verification.
+- Football AI daily rollover.
+- Auction bidding/settlement/claim.
+- Referral/affiliate/ambassador attribution and commissions.
+- Wallet/ledger reconciliation.
+- Promotions/events/rewards.
+- Notifications/localization.
+
+## Admin journeys
+- Super Admin promotes ordinary user to Admin.
+- Admin cannot promote user to Admin/Super Admin.
+- Admin cannot change privileged roles through alternate endpoints.
+- Super Admin can perform authorized privileged role changes.
+- KYC review/override permissions.
+- Financial adjustment permissions.
+- Game/configuration permissions.
+- Audit records for all privileged actions.
+
+## Failure/concurrency testing
+- Duplicate submissions.
+- Double clicks.
+- Concurrent joins/bids/withdrawals.
+- Provider timeout/failure.
+- Webhook replay.
+- Worker restart.
+- Database retry.
+- Midnight rollover.
+- Session invalidation.
+
+## Completion gate
+Cross-domain E2E tests prove that the intended identity → KYC → VIP relationships, withdrawal phone gate, financial settlement and Admin privilege hierarchy work together in production-like conditions.
+
+---
+
+# Phase 14 — Production Readiness, Cleanup & Final Sign-Off
+
+## Objective
+Close remaining gaps without introducing new architecture unnecessarily and certify the complete BitZimi platform.
+
+## Final audit
+- Re-run full main-platform audit.
+- Re-run full Admin Panel audit.
+- Compare implementation against this roadmap and `audit report.md`.
+- Re-check all seven games.
+- Re-check KYC + Didit integration.
+- Re-check phone verification in independent and dependent flows.
+- Re-check VIP subscription versus KYC eligibility.
+- Re-check withdrawal phone gating.
+- Re-check Super Admin/Admin role boundaries.
+
+## Cleanup
+- Remove verified dead code.
+- Remove duplicate services.
+- Remove obsolete localStorage authorities.
+- Remove development/mock providers from production paths.
+- Remove localhost fallbacks.
+- Reconcile documentation with actual implementation.
+
+## Production verification
+- Supabase.
+- Render.
+- Vercel.
+- Storage.
+- SMS provider.
+- Email provider/Brevo.
+- Didit.
+- Payment providers.
+- External game/football providers where applicable.
+- Environment variables/secrets.
+- Monitoring/alerts.
+- Backups/recovery.
+
+## Final acceptance criteria
+- No critical or high-severity unresolved security/financial/identity defects.
+- No client-controlled authoritative state.
+- KYC cannot be verified without the required phone prerequisite and required BitZimi + Didit verification.
+- KYC verification does not automatically grant VIP.
+- VIP requires KYC verification and a separate subscription or authorized grant.
+- Withdrawal automatically verifies phone only when needed and never repeatedly asks an already verified user.
+- Only Super Admin can change privileged roles or promote users to Admin/Super Admin.
+- All ordinary Admin operations remain available within their assigned permissions.
+- All seven games and their required fairness rules work correctly.
+- Wallet/ledger reconciles across every money-moving domain.
+- Admin Panel is fully functional and auditable.
+- Automated tests, E2E tests and production smoke tests pass.
+
+---
+
+# Roadmap Status Rule
+
+A phase is **Complete** only when its implementation, security checks, cross-layer integration, tests and verification gates pass. If a later audit discovers a business-rule mismatch, update the roadmap and audit report first, then implement the corrected rule rather than building on an incorrect assumption.
