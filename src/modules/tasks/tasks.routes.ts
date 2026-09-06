@@ -6,36 +6,22 @@ import { createTask, listTasks, getTask, getMyTasks, updateTask, updateTaskStatu
 export async function tasksRoutes(app: FastifyInstance) {
   app.addHook("onRequest", authenticate);
 
-  app.get("/", async (req, reply) => {
-    const q = ListTasksQuery.parse(req.query);
-    return reply.send({ data: await listTasks(q) });
-  });
+  app.get("/", async (req, reply) => reply.send({ data: await listTasks(ListTasksQuery.parse(req.query)) }));
+  app.get("/mine", async (req, reply) => reply.send({ data: await getMyTasks(req.user.sub, (req.query as any).status as string | undefined) }));
+  app.get("/:id", async (req, reply) => reply.send({ data: await getTask((req.params as { id: string }).id) }));
+  app.post("/", async (req, reply) => reply.status(201).send({ data: await createTask(req.user.sub, CreateTaskSchema.parse(req.body)) }));
 
-  app.get("/mine", async (req, reply) => {
-    const q = (req.query as any).status as string | undefined;
-    return reply.send({ data: await getMyTasks(req.user.sub, q) });
-  });
-
-  app.get("/:id", async (req, reply) => {
-    const { id } = req.params as { id: string };
-    return reply.send({ data: await getTask(id) });
-  });
-
-  app.post("/", async (req, reply) => {
-    const body = CreateTaskSchema.parse(req.body);
-    return reply.status(201).send({ data: await createTask(req.user.sub, body) });
-  });
-
-  // Content edits are intentionally separate from lifecycle control. The service
-  // forces every content edit back to pending_review.
   app.patch("/:id", async (req, reply) => {
     const { id } = req.params as { id: string };
     const body = UpdateTaskSchema.parse(req.body);
+    const keys = Object.keys(body).filter(k => (body as any)[k] !== undefined);
+    // Backwards-compatible lifecycle call: status-only means pause/resume. A creator
+    // cannot combine status with content edits, and cannot submit protected states.
+    if (keys.length === 1 && body.status) return reply.send({ data: await updateTaskStatus(req.user.sub, id, body.status) });
+    if (body.status) throw Object.assign(new Error("Status cannot be changed together with task content"), { statusCode: 400, code: "INVALID_STATUS_MUTATION" });
     return reply.send({ data: await updateTask(req.user.sub, id, body) });
   });
 
-  // Creator lifecycle control is limited to active <-> paused. Protected review,
-  // approval and rejection states cannot be supplied by the creator.
   app.patch("/:id/status", async (req, reply) => {
     const { id } = req.params as { id: string };
     const body = UpdateTaskStatusSchema.parse(req.body);
@@ -43,8 +29,7 @@ export async function tasksRoutes(app: FastifyInstance) {
   });
 
   app.delete("/:id", async (req, reply) => {
-    const { id } = req.params as { id: string };
-    await deleteTask(req.user.sub, id);
+    await deleteTask(req.user.sub, (req.params as { id: string }).id);
     return reply.status(204).send();
   });
 }
