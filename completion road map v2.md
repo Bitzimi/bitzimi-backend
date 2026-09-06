@@ -1,9 +1,9 @@
 # BitZimi — Master Completion Roadmap v2
 
 **Updated:** 2026-09-06  
-**Source of truth:** `audit report.md` (2026-09-05 full platform + full Admin Panel re-audit), plus subsequently confirmed BitZimi business/payment requirements.
+**Source of truth:** `audit report.md` (2026-09-05 full platform + full Admin Panel re-audit), plus subsequently confirmed BitZimi business/payment requirements and the 2026-09-06 deposit/withdrawal flow audit.
 
-This roadmap remains the master completion roadmap. It preserves the audited roadmap structure and incorporates the confirmed phone-verification, KYC/Didit, withdrawal-gate, Kora payment and currency requirements. It does not treat unsupported provider capabilities as available features.
+This roadmap remains the master completion roadmap. It preserves the audited roadmap structure and incorporates the confirmed phone-verification, KYC/Didit, withdrawal-gate, Kora payment, currency, and current BitZimi deposit/withdrawal-flow requirements. It does not treat unsupported provider capabilities as available features.
 
 **Progress rule:** Every phase and every item starts as `[ ]`. A phase may change to `[✓]` only after every item under that phase has been implemented, tested, verified, re-tested where necessary, and confirmed fully passed. After confirmation, the completed phase and all of its items must be marked `[✓]` and committed to GitHub immediately. Incomplete phases remain `[ ]`.
 
@@ -53,9 +53,22 @@ This roadmap remains the master completion roadmap. It preserves the audited roa
 - Logical dependency: **Phone Verified → KYC (BitZimi + Didit) → KYC Verified → VIP eligibility → VIP subscription/grant → VIP user.**
 
 ### Withdrawal
-- Clicking Withdraw checks authoritative phone verification.
-- If unverified, open phone verification automatically, then continue to withdrawal after successful verification.
-- If already verified, continue directly without repeating verification.
+- The current BitZimi withdrawal UX is the canonical UX baseline and must be preserved unless a specific audit finding requires a correction.
+- The Wallet page opens the unified `WithdrawalWizard`, which currently follows: **method → phone gate → bank/wallet setup → PIN setup → amount/form → PIN confirmation → submission → success/status**.
+- Fiat withdrawal means the existing bank-destination path; crypto withdrawal means the existing USDT BEP-20/BSC destination path.
+- Clicking Withdraw checks authoritative phone verification. If unverified, open the existing phone-verification flow automatically and then continue the original withdrawal flow after success; do not send the user through an unrelated generic page unless the existing verification UX requires it.
+- Already-verified users skip the phone step.
+- Preserve the existing PIN confirmation step and backend one-time PIN-token security; do not restore client-side PIN authority.
+- Preserve the existing bank-account and USDT-wallet destination UX, but destination data and eligibility must become backend-authoritative.
+- Preserve the existing withdrawal amount/fee/limit/status UX while replacing provider-less execution with the configured real payout rail.
+- The browser/local monitoring service may remain a UI cache during migration, but it must never determine whether money was debited, whether a payout succeeded, or whether a withdrawal is complete.
+- A successful withdrawal must only be shown as completed after the authoritative backend/provider state confirms it.
+
+### Deposit
+- The current BitZimi deposit UX is the canonical UX baseline and must be preserved unless a specific audit finding requires a correction.
+- Fiat deposit currently presents a bank-transfer/account-details flow; this must be converted to the confirmed Kora collection flow rather than continuing the current manually generated bank-reference implementation.
+- Crypto deposit currently presents a USDT BEP-20/BSC wallet address plus a unique exact session amount and a timed monitoring screen. Preserve this UX and exact-amount concept while keeping blockchain detection/crediting backend-authoritative.
+- No deposit credit may rely on frontend polling, local monitoring state, or a client success response.
 
 ## Canonical payment and currency rules
 
@@ -80,9 +93,9 @@ This roadmap remains the master completion roadmap. It preserves the audited roa
 | NGN | Active | Active | Kora-supported rail; production activation/configuration required |
 | KES | Active | Active | Kora-supported rail; merchant/rail availability must be configured |
 | ZAR | Active | Active | Kora-supported rail; merchant/rail availability must be configured |
-| GHS | Active when Kora merchant rail is enabled | Active where supported rail is enabled | Use the actually enabled Kora Ghana rail; do not assume bank payout if only mobile-money support is enabled |
-| USD | **Integrated but ON HOLD** | Active | USD collection remains disabled until Kora confirms/activates merchant availability; withdrawal uses supported Kora bank payout |
-| GBP | **Not supported for deposit currently** | Active | Do not expose GBP deposit until Kora officially supports/activates it; GBP bank withdrawal remains supported |
+| GHS | Active when Kora merchant rail is enabled | Active where supported rail is enabled | Use the actually enabled Kora Ghana rail; do not assume bank payout if only mobile money is enabled |
+| USD | **Integrated but ON HOLD** | Active | USD collection remains disabled until Kora confirms/activates merchant availability; withdrawal uses a supported Kora payout rail |
+| GBP | **Not supported for deposit currently** | Active | Do not expose GBP deposit until Kora officially supports/activates it; GBP payout capability must still be verified for the merchant/rail before exposure |
 
 ### Deposit lifecycle
 - Create the BitZimi transaction/reference before collection where required.
@@ -150,13 +163,18 @@ This roadmap remains the master completion roadmap. It preserves the audited roa
 - [ ] Separate Task Vault concept from spendable balances.
 - [ ] Atomic debit/credit, concurrency, idempotency and reconciliation.
 - [ ] Replace placeholder/manual deposit flow with real Kora collection lifecycle.
-- [ ] Replace provider-less/manual withdrawal execution with real Kora payout lifecycle.
+- [ ] Replace provider-less/manual withdrawal execution with real Kora payout lifecycle while preserving the audited current BitZimi WithdrawalWizard UX.
 - [ ] Implement NGN, KES, ZAR and configured GHS deposit/withdrawal rails according to actual Kora merchant activation.
 - [ ] Integrate USD deposit architecture but keep USD deposits **ON HOLD/disabled** until Kora confirms/activates merchant availability.
 - [ ] Keep GBP deposits unavailable until Kora officially supports/activates a GBP collection rail.
-- [ ] Keep USD withdrawals active and GBP withdrawals active through supported Kora bank payout rails.
+- [ ] Keep USD withdrawals active and GBP withdrawals active only through a verified, supported Kora payout rail for the merchant.
 - [ ] Add provider references, idempotency, webhook authentication/replay protection and reconciliation.
 - [ ] Store exact transaction currency, gross/fee/net, FX rate/source and base-USD value where applicable.
+- [ ] Preserve the current crypto deposit BEP-20 unique-amount UX while making blockchain matching, confirmations and wallet credit fully backend-authoritative and durable.
+- [ ] Preserve the current crypto withdrawal USDT BEP-20 UX while implementing actual on-chain payout execution, durable status/reconciliation, duplicate protection and failure/retry handling.
+- [ ] Fiat deposit must replace the current generated BZ/manual bank-reference flow with the actual Kora collection rail; no manual/admin bank-transfer confirmation may be the normal production path.
+- [ ] Fiat withdrawal must preserve the current bank destination/fee/limit/PIN UX while connecting the backend reservation and payout lifecycle to Kora.
+- [ ] Remove frontend/local monitoring authority from deposit and withdrawal finalization; it may only reflect backend state.
 - [ ] Fiat/crypto deposits, provider webhooks and recovery.
 - [ ] Withdrawals, limits, fees, PIN, authoritative phone/KYC checks, bank/USDT destinations and processing.
 - [ ] Transfers and every domain's financial effects.
@@ -256,10 +274,11 @@ Admin requirements: backend permissions authoritative; desktop/mobile nav consis
 - [ ] Upload and PII/logging security.
 - [ ] Session/replay protection and secure headers/CORS.
 - [ ] Durable worker scheduling/locking/retries/idempotency.
-- [ ] Remove process-local authoritative state.
+- [ ] Remove process-local authoritative state, including financial/deposit/withdrawal monitoring cursors and completion state.
 - [ ] Game restart and Render multi-instance recovery.
 - [ ] Verify Vercel + Render + Supabase + storage + SMS + email + payment + football providers and all production env variables.
 - [ ] Verify Kora merchant activation separately for each enabled collection/payout rail.
+- [ ] Verify Kora collection/payout webhook authenticity, reference reconciliation and provider-status query/recovery paths.
 - [ ] Keep unsupported or unconfirmed rails disabled rather than exposing them optimistically.
 
 ## Phase 15 — AI Developer Center [ ]
@@ -282,14 +301,16 @@ After dependency analysis remove:
 - [ ] dead admin/game services/routes/components;
 - [ ] obsolete DB fields/models/indexes;
 - [ ] stale flags and phase-number comments;
-- [ ] duplicate payment/deposit/withdrawal implementations.
+- [ ] duplicate payment/deposit/withdrawal implementations, including superseded local-only withdrawal dialogs/monitoring paths after dependency verification.
 
 ## Phase 17 — Automated Testing, E2E & Final Sign-Off [ ]
 - [ ] Backend unit/integration/authorization/financial/concurrency/KYC/phone/game/worker tests.
 - [ ] Frontend automated test framework and CI.
 - [ ] Full E2E: registration → email verification → login/2FA → independent phone verification → KYC/Didit → profile → VIP → tasks → all games/fairness → Football AI → auction → referral/affiliate/ambassador → deposits/withdrawals → promotions/events/notifications → admin.
 - [ ] Payment E2E for NGN/KES/ZAR/GHS enabled rails, USD withdrawal and GBP withdrawal; USD deposit remains disabled pending Kora confirmation; GBP deposit remains unavailable.
-- [ ] Withdrawal phone-gate E2E for both unverified and already-verified users.
+- [ ] Deposit-flow E2E for fiat/Kora and crypto/BEP-20, including pending/confirming/success/expired/failure/restart/replay paths.
+- [ ] Withdrawal-flow E2E for the current BitZimi WithdrawalWizard UX: bank and crypto branches, phone gate, destination setup, PIN verification, amount/fee/limits, pending/final states, failure/release and retry/recovery.
+- [ ] Withdrawal phone-gate E2E for both unverified and already-verified users, including automatic return to the original withdrawal flow after verification.
 - [ ] Adversarial/security/concurrency/replay/idempotency tests.
 - [ ] Final gate: no unresolved P0 issues; no P1 issues without accepted risk; canonical identity/phone/KYC/VIP rules verified; ledger reconciled; security and production integrations verified; final audit updated.
 - [ ] Final sign-off follows the phase order 1 → 17.

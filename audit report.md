@@ -1002,3 +1002,138 @@ The most important newly identified blockers are:
 The completion roadmap must therefore treat **Identity + Authentication + Phone Verification + KYC + Profile** as foundational work before dependent privileges, followed by the domain lifecycles, financial integrity, complete Admin Panel hardening, infrastructure resilience, cleanup and final automated/E2E production sign-off.
 
 **No phase is complete merely because the code compiles.**
+
+---
+
+# 26. Deposit & Withdrawal Flow Audit — 2026-09-06
+
+This section was added after a dedicated audit of the actual BitZimi frontend flow and the corresponding backend deposit/withdrawal modules. The purpose was to understand the current UX/business sequence first and then identify only the corrections required for real financial execution.
+
+## 26.1 Current Withdraw entry and canonical UX
+
+The current Wallet page opens the unified `WithdrawalWizard`, not the older standalone bank/crypto dialogs. The audited wizard defines the current intended sequence as:
+
+**Method → Phone gate → Bank setup / Wallet setup → PIN setup → Amount/form → PIN confirmation → Submission → Success/status.**
+
+The wizard has two methods:
+
+- **Bank / Fiat:** registered bank destination.
+- **Crypto:** USDT BEP-20/BSC wallet destination.
+
+The current UX already attempts backend-authoritative limits and PIN verification, and its submission path calls `POST /api/v1/withdrawals` with a one-time PIN token. This is the correct foundation to preserve.
+
+### Corrections required without replacing the UX
+
+1. Phone verification must use backend-authoritative phone state. The current wizard still reads `userProfileService`/localStorage for the initial phone gate.
+2. Bank and crypto destination setup must be backend-authoritative; localStorage may not decide whether a destination exists or is valid.
+3. The wizard must not treat the local `depositMonitoringService` as proof of a pending/completed withdrawal.
+4. `onBalanceDeduct` must remain display synchronization only; the backend withdrawal transaction must be the sole financial debit authority.
+5. Success/completed UI must be driven by authoritative backend/provider state, not a locally created withdrawal session.
+
+## 26.2 Fiat withdrawal — current backend behavior
+
+Backend `POST /api/v1/withdrawals` currently:
+
+- checks the bank-withdrawal feature flag;
+- enforces minimum withdrawal;
+- verifies a one-time PIN token;
+- checks tier limits;
+- calculates fee;
+- checks aggregate available withdrawal balance;
+- atomically claims withdrawal-limit usage;
+- debits game → task → referral → affiliate → ambassador wallets atomically;
+- creates a `Withdrawal` row;
+- writes a ledger entry.
+
+This is a strong reservation/debit foundation, but it **does not submit a bank payout to a real provider**. There is no Kora payout call in this path. The withdrawal therefore stops at an internal pending/request state rather than completing the actual bank transfer.
+
+The current frontend's older `BankWithdrawalDialog` is also provider-less/local-state based and should not be restored as the active flow.
+
+### Required correction
+
+Preserve the unified bank withdrawal UX and connect the existing atomic financial foundation to the Kora payout lifecycle: provider reference/idempotency, pending state, webhook/query reconciliation, success finalization, failure release, retries and restart recovery.
+
+## 26.3 Crypto withdrawal — current behavior
+
+The repository contains an older standalone `CryptoWithdrawalDialog` that creates a local monitoring withdrawal and immediately calls `onBalanceDeduct`. It does not submit an on-chain transaction itself.
+
+The current unified `WithdrawalWizard` is the active frontend foundation and calls the backend withdrawal API. However, the backend `withdrawals.service.ts` also currently stops after internal debit + withdrawal record + ledger entry. The configuration contains `WITHDRAWAL_PRIVATE_KEY`/`WITHDRAWAL_WALLET_ADDRESS` as a future signing configuration, but the audited withdrawal service does not execute an on-chain payout.
+
+### Required correction
+
+Preserve the current unified USDT BEP-20 UX, but implement actual backend-controlled on-chain payout execution, durable transaction tracking, idempotency, confirmation/status reconciliation, failure handling and safe retry/recovery. No client callback or local monitoring state may finalize the payout.
+
+## 26.4 Current Fiat Deposit flow
+
+The active frontend bank-deposit dialog asks for an NGN amount, retrieves platform bank receiving details, creates a backend deposit session and monitors its status.
+
+However, the backend `createDeposit()` implementation currently generates a local `BZ...` reference for `paymentAddress` when `method === "bank"`. This is **not a Kora collection transaction**. There is no Kora checkout/virtual-account collection request, provider reference, provider webhook verification or Kora pay-in reconciliation in the audited deposit module.
+
+Therefore the current fiat deposit UX is understood and can be preserved, but its financial execution must be replaced with the confirmed Kora collection flow.
+
+### Required correction
+
+- Create the BitZimi transaction/reference and corresponding Kora collection transaction.
+- Use the correct Kora rail/currency.
+- Receive and authenticate Kora webhook events.
+- Reconcile Kora reference/status to the BitZimi deposit.
+- Credit the Game Wallet only after authoritative successful payment confirmation.
+- Support pending/failed/reversed/disputed states and idempotent replay.
+- Keep USD deposit disabled until Kora merchant activation is confirmed; do not expose unsupported collection rails.
+
+## 26.5 Current Crypto Deposit flow
+
+The current crypto deposit flow is materially closer to the intended architecture:
+
+1. User enters a USD amount.
+2. Backend creates a deposit session.
+3. Backend supplies the configured USDT BEP-20/BSC deposit address.
+4. Backend generates a unique exact `memoAmount`/price-tag amount for the active session.
+5. Frontend displays the exact amount and address and monitors the session.
+6. Backend `cryptoDepositMonitor` scans BSC USDT transfer events, matches the unique amount, waits for the configured confirmations, and atomically credits the user's Game Wallet.
+7. A completed deposit creates a completed transaction and notification.
+
+This flow should be preserved rather than replaced.
+
+### Corrections required
+
+- The monitor's processed-block cursor is process-local and must become durable for restart/multi-instance safety.
+- Blockchain matching/crediting must remain backend-only and idempotent.
+- The exact-amount uniqueness strategy must be protected by database-level constraints or an equivalent durable uniqueness guarantee, not only an application loop.
+- Historical transaction amount/currency/FX metadata must be immutable.
+- The frontend polling/local monitoring layer must remain display-only.
+
+## 26.6 Financial-flow conclusion
+
+The audit confirms that the current BitZimi **UX/business flow should be preserved**. The main missing pieces are financial execution and authoritative provider/blockchain reconciliation:
+
+- **Fiat Deposit:** current UX exists; Kora collection execution is missing.
+- **Crypto Deposit:** current UX + backend monitor exist; durability/constraint hardening is required.
+- **Fiat Withdrawal:** current unified UX + atomic internal debit exist; Kora payout execution is missing.
+- **Crypto Withdrawal:** current unified UX + internal debit foundation exist; actual on-chain payout execution is missing.
+
+These findings are completion blockers for the financial phase and are now explicitly incorporated into `completion road map v2.md`.
+
+---
+
+# 27. External Kora capability check — 2026-09-06
+
+Current Kora documentation confirms that its payout API supports Nigerian NGN bank accounts, Kenyan KES bank accounts, South African ZAR bank accounts, and mobile-money payouts including KES and GHS; the payout API also documents destination currencies including NGN, KES, GHS, ZAR and USD, with special bank-country handling for USD/GBP destinations. Kora's current accept-payments documentation lists bank transfer/virtual-account/other collection channels by market, including NGN, KES, GHS and ZAR channels, while USD/GBP capability still requires merchant/product activation and must not be assumed active merely from generic API capability. citeturn0search0turn0search2turn0search14
+
+Kora also exposes pay-in history and payout history APIs and webhook confirmation mechanisms, which fit the required provider-reference/reconciliation architecture. citeturn0search10turn0search2
+
+**Audit rule:** generic Kora API capability is not the same as BitZimi merchant activation. Each currency/rail must remain disabled until the actual BitZimi Kora account is activated/configured for that rail.
+
+---
+
+# 28. Updated immediate financial priorities
+
+1. Preserve the unified `WithdrawalWizard` UX and remove authority from local monitoring/localStorage.
+2. Connect fiat withdrawals to Kora payouts with atomic reservation, idempotency and webhook/query reconciliation.
+3. Implement real crypto withdrawal execution and durable on-chain reconciliation.
+4. Replace the current generated-BZ fiat deposit reference flow with Kora collection.
+5. Harden crypto deposit cursor, uniqueness and replay/restart behavior without changing its current unique-amount UX.
+6. Add currency/gross/fee/net/FX/provider-reference fields and immutable financial history where missing.
+7. Verify each Kora merchant rail before enabling it in production.
+
+**Updated conclusion:** BitZimi's deposit/withdrawal user journeys are substantially present, but the current fiat provider execution and crypto withdrawal execution are not production-complete. The existing user-facing flow should be retained and corrected at the financial/provider boundary rather than redesigned.
