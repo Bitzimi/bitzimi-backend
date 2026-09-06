@@ -43,6 +43,7 @@ export async function createTask(advertiserId: string, input: any) {
     db.subscription.findUnique({ where: { userId: advertiserId } }),
   ]);
   if (!profile) throw Object.assign(new Error("User profile not found"), { statusCode: 404 });
+  if (!profile.phoneVerified) throw Object.assign(new Error("Verified phone is required to create tasks"), { statusCode: 403, code: "PHONE_REQUIRED" });
   if (kyc?.status !== "verified") throw Object.assign(new Error("Verified KYC is required to create tasks"), { statusCode: 403, code: "KYC_REQUIRED" });
   const isVIP = !!(sub?.isActive && sub.endsAt > new Date());
   if (!isVIP) throw Object.assign(new Error("VIP membership required to create tasks"), { statusCode: 403, code: "VIP_REQUIRED" });
@@ -50,10 +51,8 @@ export async function createTask(advertiserId: string, input: any) {
   const refKeys: Array<{ key: string; slot: number }> = [];
   for (let i = 0; i < (input.referenceScreenshots ?? []).length; i++) {
     const dataUrl = input.referenceScreenshots[i];
-    if (dataUrl.startsWith("data:")) {
-      const stored = await storeDocument(dataUrl, `tasks/ref/${advertiserId}`);
-      refKeys.push({ key: stored.key, slot: i });
-    }
+    const stored = await storeDocument(dataUrl, `tasks/ref/${advertiserId}`);
+    refKeys.push({ key: stored.key, slot: i });
   }
   const totalReward = input.rewardPerSlot * input.totalSlots;
 
