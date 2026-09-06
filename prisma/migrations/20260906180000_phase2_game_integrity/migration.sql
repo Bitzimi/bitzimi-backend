@@ -37,3 +37,47 @@ DROP TRIGGER IF EXISTS dice_round_player_merge ON dice_rounds;
 CREATE TRIGGER dice_round_player_merge
 BEFORE UPDATE OF player_ids ON dice_rounds
 FOR EACH ROW EXECUTE FUNCTION bitzimi_merge_dice_players();
+
+-- Financial settlement rows are immutable after settlement. This makes a concurrent
+-- settlement transaction roll back after the first transaction has committed.
+CREATE OR REPLACE FUNCTION bitzimi_block_settled_game_bet_mutation()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF OLD.settled THEN
+    RAISE EXCEPTION 'GAME_BET_ALREADY_SETTLED';
+  END IF;
+  RETURN NEW;
+END; $$;
+
+DROP TRIGGER IF EXISTS game_bet_settlement_guard ON game_bets;
+CREATE TRIGGER game_bet_settlement_guard
+BEFORE UPDATE ON game_bets
+FOR EACH ROW EXECUTE FUNCTION bitzimi_block_settled_game_bet_mutation();
+
+CREATE OR REPLACE FUNCTION bitzimi_block_finalized_pvp_mutation()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF OLD.status IN ('settled','cancelled') THEN
+    RAISE EXCEPTION 'PVP_MATCH_ALREADY_FINAL';
+  END IF;
+  RETURN NEW;
+END; $$;
+
+DROP TRIGGER IF EXISTS pvp_match_finalization_guard ON pvp_matches;
+CREATE TRIGGER pvp_match_finalization_guard
+BEFORE UPDATE ON pvp_matches
+FOR EACH ROW EXECUTE FUNCTION bitzimi_block_finalized_pvp_mutation();
+
+CREATE OR REPLACE FUNCTION bitzimi_block_finalized_dice_round_mutation()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF OLD.status IN ('result','completed','cancelled') THEN
+    RAISE EXCEPTION 'DICE_ROUND_ALREADY_FINAL';
+  END IF;
+  RETURN NEW;
+END; $$;
+
+DROP TRIGGER IF EXISTS dice_round_finalization_guard ON dice_rounds;
+CREATE TRIGGER dice_round_finalization_guard
+BEFORE UPDATE ON dice_rounds
+FOR EACH ROW EXECUTE FUNCTION bitzimi_block_finalized_dice_round_mutation();
