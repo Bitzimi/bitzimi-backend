@@ -121,6 +121,9 @@ This is the existing master roadmap. No second roadmap has been created.
 - [✓] Secure proof/document ownership and storage.
 - [✓] Admin task/proof management and audit logging.
 - [✓] **Additional requirement discovered during full audit:** creator update paths must not accept a status mutation that can bypass the required review lifecycle.
+- [✓] **Additional requirement discovered during implementation:** proof AI verification is queued in the existing DB-backed job queue before the request returns, with retry/stuck-job recovery; reward settlement remains transactionally guarded and idempotent.
+- [✓] **Additional requirement discovered during implementation:** task reference/proof uploads are server-validated; client-supplied existing storage paths are rejected for task reference screenshots and proof uploads are restricted to supported image MIME types.
+- [✓] **Additional requirement discovered during implementation:** rejecting an edited task with previously completed proofs refunds only the remaining Task Vault escrow, preventing an over-refund of already-paid rewards.
 
 # Phase 2 — Games Center [ ]
 - [ ] Backend-authoritative rounds, stakes, timers, locks, results and settlement.
