@@ -1,24 +1,4 @@
-/**
- * Unified Provably Fair Engine — Phase 11
- *
- * Algorithm: HMAC-SHA256(key=serverSeed, message=`${clientSeed}:${nonce}`)
- *
- * Flow:
- *   1. generateServerSeed()   → before round starts (commitment)
- *   2. hashServerSeed(seed)   → publish hash to players before any bets
- *   3. [bets placed]
- *   4. generateClientSeed()   → derived from deterministic public data
- *   5. deriveXxx(...)         → result is deterministic from seeds
- *   6. reveal serverSeed      → after settlement (players can now verify)
- *
- * Security guarantees:
- *   - Server commits to serverSeed BEFORE bets via the hash
- *   - clientSeed comes from public on-chain data the server cannot predict
- *   - Together they make results verifiable and manipulation-proof
- */
 import { createHmac, createHash, randomBytes } from "crypto";
-
-// ── Verification ID generation ─────────────────────────────────────────────────
 
 const VID_PREFIXES: Record<string, string> = {
   color_game:   "BZM-CP",
@@ -29,11 +9,6 @@ const VID_PREFIXES: Record<string, string> = {
   dice_arena:   "BZM-DA",
 };
 
-/**
- * Generate a globally unique Verification ID for a game round.
- * Format: BZM-{2-letter-code}-{8 uppercase hex chars}
- * reaction_tap is excluded — it does not use provably fair.
- */
 export function generateVerificationId(gameType: string): string {
   const prefix = VID_PREFIXES[gameType];
   if (!prefix) throw new Error(`No verification ID prefix for game type: ${gameType}`);
@@ -41,10 +16,6 @@ export function generateVerificationId(gameType: string): string {
   return `${prefix}-${suffix}`;
 }
 
-/**
- * Decode a Verification ID prefix to determine the game type and model.
- * Returns null if the prefix is unrecognised.
- */
 export function decodeVerificationId(verificationId: string): {
   gameType: string;
   model: "game_round" | "pvp_match" | "dice_round";
@@ -59,76 +30,42 @@ export function decodeVerificationId(verificationId: string): {
   return null;
 }
 
-// ── Seed generation ────────────────────────────────────────────────────────────
-
-/** Generate a cryptographically secure random server seed (64 hex chars). */
 export function generateServerSeed(): string {
   return randomBytes(32).toString("hex");
 }
 
-/** Commit to the server seed by publishing its SHA-256 hash. */
 export function hashServerSeed(seed: string): string {
   return createHash("sha256").update(seed).digest("hex");
 }
 
-/**
- * Generate a deterministic client seed from public parts.
- * Parts should be public values determined AFTER server seed is committed
- * (e.g. player IDs, round start time, match ID).
- */
 export function generateClientSeed(...publicParts: string[]): string {
   return createHash("sha256").update(publicParts.join("|")).digest("hex");
 }
 
-// ── Core derivation ────────────────────────────────────────────────────────────
-
 function getResultBytes(serverSeed: string, clientSeed: string, nonce: number): Buffer {
   const hmac = createHmac("sha256", serverSeed);
   hmac.update(`${clientSeed}:${nonce}`);
-  return Buffer.from(hmac.digest("hex"), "hex"); // 32 bytes
+  return Buffer.from(hmac.digest("hex"), "hex");
 }
 
-/** Read an unbiased uint32 from buffer at position `index` (wraps at 28 to stay safe). */
 function uint32At(buf: Buffer, index: number): number {
   return buf.readUInt32BE((index * 4) % 28);
 }
 
-// ── Game-specific derivation ───────────────────────────────────────────────────
-
-/** Color Prediction: byte 0 even → "red", odd → "blue" */
-export function deriveColorResult(
-  serverSeed: string,
-  clientSeed: string,
-  nonce: number
-): "red" | "blue" {
+export function deriveColorResult(serverSeed: string, clientSeed: string, nonce: number): "red" | "blue" {
   const b = getResultBytes(serverSeed, clientSeed, nonce);
   return b[0] % 2 === 0 ? "red" : "blue";
 }
 
-/** Coin Flip: byte 0 even → "heads", odd → "tails" */
-export function deriveCoinFlip(
-  serverSeed: string,
-  clientSeed: string,
-  nonce: number
-): "heads" | "tails" {
+export function deriveCoinFlip(serverSeed: string, clientSeed: string, nonce: number): "heads" | "tails" {
   const b = getResultBytes(serverSeed, clientSeed, nonce);
   return b[0] % 2 === 0 ? "heads" : "tails";
 }
 
-/**
- * Dice Clash: two dice rolls, no ties.
- * Uses bytes 0-3 for p1, bytes 4-7 for p2.
- * On tie, advances to next byte pairs until no tie (up to 7 attempts).
- */
-export function deriveDiceClash(
-  serverSeed: string,
-  clientSeed: string,
-  nonce: number
-): { p1Roll: number; p2Roll: number } {
+export function deriveDiceClash(serverSeed: string, clientSeed: string, nonce: number): { p1Roll: number; p2Roll: number } {
   const b = getResultBytes(serverSeed, clientSeed, nonce);
   let p1Roll = (uint32At(b, 0) % 6) + 1;
   let p2Roll = (uint32At(b, 1) % 6) + 1;
-  // Break ties using subsequent byte pairs
   for (let i = 2; p1Roll === p2Roll && i < 7; i += 2) {
     p1Roll = (uint32At(b, i) % 6) + 1;
     p2Roll = (uint32At(b, i + 1) % 6) + 1;
@@ -136,16 +73,7 @@ export function deriveDiceClash(
   return { p1Roll, p2Roll };
 }
 
-/**
- * Dice rolls for multiple players (Royale / Arena).
- * Player i gets bytes at position i. Players MUST be in a stable sorted order.
- */
-export function deriveDiceRolls(
-  serverSeed: string,
-  clientSeed: string,
-  nonce: number,
-  sortedPlayerIds: string[]
-): Record<string, number> {
+export function deriveDiceRolls(serverSeed: string, clientSeed: string, nonce: number, sortedPlayerIds: string[]): Record<string, number> {
   const b = getResultBytes(serverSeed, clientSeed, nonce);
   const rolls: Record<string, number> = {};
   for (let i = 0; i < sortedPlayerIds.length; i++) {
@@ -154,17 +82,7 @@ export function deriveDiceRolls(
   return rolls;
 }
 
-/**
- * Tie-break rolls — uses a sub-nonce suffix to get fresh bytes.
- * Called when two or more players are tied on primary rolls.
- */
-export function deriveTieBreakRolls(
-  serverSeed: string,
-  clientSeed: string,
-  nonce: number,
-  tbRound: number,
-  candidateIds: string[]
-): Record<string, number> {
+export function deriveTieBreakRolls(serverSeed: string, clientSeed: string, nonce: number, tbRound: number, candidateIds: string[]): Record<string, number> {
   const hmac = createHmac("sha256", serverSeed);
   hmac.update(`${clientSeed}:${nonce}:tb:${tbRound}`);
   const b = Buffer.from(hmac.digest("hex"), "hex");
@@ -176,37 +94,53 @@ export function deriveTieBreakRolls(
 }
 
 /**
- * Spin Battle winner: deterministic index into sorted player list.
- * Using sorted order ensures result is reproducible regardless of join order.
+ * Spin Battle winner is selected proportionally to each player's locked stake.
+ * Rejection sampling over a 64-bit HMAC value avoids modulo bias.
  */
 export function deriveSpinWinner(
   serverSeed: string,
   clientSeed: string,
   nonce: number,
-  sortedPlayerIds: string[]
+  sortedPlayerIds: string[],
+  playerWeights: Record<string, number> = {},
 ): string {
-  const b = getResultBytes(serverSeed, clientSeed, nonce);
-  const idx = uint32At(b, 0) % sortedPlayerIds.length;
-  return sortedPlayerIds[idx];
+  if (sortedPlayerIds.length === 0) throw new Error("Spin Battle requires at least one player");
+  const scale = 1_000_000;
+  const weights = sortedPlayerIds.map(id => Math.max(0, Math.round((playerWeights[id] ?? 0) * scale)));
+  const total = weights.reduce((a, b) => a + b, 0);
+  if (total <= 0) throw new Error("Spin Battle requires positive player stakes");
+
+  const TWO64 = 18446744073709551616n;
+  for (let attempt = 0; attempt < 16; attempt++) {
+    const b = getResultBytes(serverSeed, clientSeed, nonce + attempt);
+    const x = (BigInt(uint32At(b, 0)) << 32n) | BigInt(uint32At(b, 1));
+    const totalBig = BigInt(total);
+    const limit = (TWO64 / totalBig) * totalBig;
+    if (x >= limit) continue;
+    let cursor = Number(x % totalBig);
+    for (let i = 0; i < weights.length; i++) {
+      if (cursor < weights[i]) return sortedPlayerIds[i];
+      cursor -= weights[i];
+    }
+  }
+  return sortedPlayerIds[weights.findIndex(w => w > 0)];
 }
 
-// ── Verification ───────────────────────────────────────────────────────────────
-
 export interface VerifyInput {
-  serverSeed:     string;
+  serverSeed: string;
   serverSeedHash: string;
-  clientSeed:     string;
-  nonce:          number;
-  gameType:       string;
+  clientSeed: string;
+  nonce: number;
+  gameType: string;
   claimedResult?: any;
 }
 
 export interface VerifyOutput {
-  hashValid:      boolean;
-  resultValid:    boolean | null; // null if verification needs extra data (player list)
+  hashValid: boolean;
+  resultValid: boolean | null;
   computedResult: any;
-  algorithm:      string;
-  explanation:    string;
+  algorithm: string;
+  explanation: string;
 }
 
 export function verifyFairness(input: VerifyInput): VerifyOutput {
@@ -221,42 +155,51 @@ export function verifyFairness(input: VerifyInput): VerifyOutput {
     switch (input.gameType) {
       case "color_game": {
         computedResult = deriveColorResult(input.serverSeed, input.clientSeed, input.nonce);
-        resultValid    = input.claimedResult ? computedResult === input.claimedResult : null;
-        explanation    = `Color determined by byte[0] of HMAC output: even→red, odd→blue`;
+        resultValid = input.claimedResult ? computedResult === input.claimedResult : null;
+        explanation = `Color determined by byte[0] of HMAC output: even→red, odd→blue`;
         break;
       }
       case "pvp_coinflip": {
-        const flip  = deriveCoinFlip(input.serverSeed, input.clientSeed, input.nonce);
+        const flip = deriveCoinFlip(input.serverSeed, input.clientSeed, input.nonce);
         computedResult = { coinFlip: flip };
-        resultValid    = input.claimedResult ? flip === input.claimedResult.coinFlip : null;
-        explanation    = `Coin determined by byte[0] of HMAC output: even→heads, odd→tails`;
+        resultValid = input.claimedResult ? flip === input.claimedResult.coinFlip : null;
+        explanation = `Coin determined by byte[0] of HMAC output: even→heads, odd→tails`;
         break;
       }
       case "dice_clash": {
         computedResult = deriveDiceClash(input.serverSeed, input.clientSeed, input.nonce);
-        resultValid    = input.claimedResult
-          ? computedResult.p1Roll === input.claimedResult.p1Roll &&
-            computedResult.p2Roll === input.claimedResult.p2Roll
+        resultValid = input.claimedResult
+          ? computedResult.p1Roll === input.claimedResult.p1Roll && computedResult.p2Roll === input.claimedResult.p2Roll
           : null;
-        explanation = `Player 1 die = uint32(bytes[0..4]) % 6 + 1, Player 2 die = uint32(bytes[4..8]) % 6 + 1. Tie-breaks advance byte window.`;
+        explanation = `Player 1 and Player 2 rolls are derived from independent HMAC words; equal rolls receive deterministic tie-break derivation.`;
         break;
       }
       case "spin_battle": {
-        explanation    = `Winner index = uint32(bytes[0..4]) % playerCount. Requires player list to fully verify.`;
-        computedResult = null;
-        resultValid    = null; // need player list
+        const weights = input.claimedResult?.playerBets as Record<string, number> | undefined;
+        const playerIds = input.claimedResult?.playerIds as string[] | undefined;
+        if (!weights || !playerIds?.length) {
+          explanation = `Stake-proportional winner requires the settled player list and each locked stake.`;
+          computedResult = null;
+          resultValid = null;
+          break;
+        }
+        const ordered = [...playerIds].sort();
+        const weightObject = Object.fromEntries(ordered.map(id => [id, Number(weights[id] ?? 0)]));
+        const winner = deriveSpinWinner(input.serverSeed, input.clientSeed, input.nonce, ordered, weightObject);
+        computedResult = { winner };
+        resultValid = input.claimedResult?.winner ? winner === input.claimedResult.winner : null;
+        explanation = `Winner is selected from locked player stakes using unbiased 64-bit HMAC sampling; probability equals stake / total stake.`;
         break;
       }
       case "dice_royale":
       case "dice_arena": {
-        explanation    = `Player i roll = uint32(bytes[i*4..(i+1)*4]) % 6 + 1 (sorted player order). Tie-breaks use sub-nonce ${input.nonce}:tb:N.`;
+        explanation = `Player i roll = HMAC-derived uint32 % 6 + 1 in stable sorted player order. Ties use deterministic sub-nonces.`;
         computedResult = null;
-        resultValid    = null; // need player list
+        resultValid = null;
         break;
       }
-      default: {
-        explanation    = `Unknown game type: ${input.gameType}`;
-      }
+      default:
+        explanation = `Unknown game type: ${input.gameType}`;
     }
   } catch {
     explanation = "Verification error — check inputs";
