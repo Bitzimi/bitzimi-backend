@@ -7,6 +7,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS dice_round_one_active_per_game_stake_uq
   ON dice_rounds (game_type, stake)
   WHERE status IN ('open','countdown','locked','rolling');
 
+CREATE UNIQUE INDEX IF NOT EXISTS game_bet_round_user_uq
+  ON game_bets (round_id, user_id);
+
 CREATE OR REPLACE FUNCTION bitzimi_merge_dice_players()
 RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
