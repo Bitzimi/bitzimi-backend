@@ -14,7 +14,9 @@ export const CreateTaskSchema = z.object({
   link: z.string().url("Must be a valid URL").optional(), campaignImageUrl: z.string().url().optional(),
   requirements: z.array(z.string()).max(10).default([]), proofType: z.string().optional(),
   proofInstructions: z.string().max(1000).optional(), expiresAt: z.string().datetime().optional(),
-  referenceScreenshots: z.array(z.string().refine(v => v.startsWith("data:") || v.startsWith("/uploads/"), "Must be a data URL or storage path")).max(3).default([]),
+  // Reference screenshots must be newly uploaded by this request. Existing storage
+  // paths are intentionally not accepted because they could bypass ownership checks.
+  referenceScreenshots: z.array(z.string().refine(v => v.startsWith("data:"), "Must be a data URL")).max(3).default([]),
 }).refine(d => Math.abs(d.totalBudget - d.rewardPerSlot * d.totalSlots) < 0.01, {
   message: "totalBudget must equal rewardPerSlot × totalSlots", path: ["totalBudget"],
 });
