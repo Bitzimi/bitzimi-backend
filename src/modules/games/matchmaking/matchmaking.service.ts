@@ -7,7 +7,9 @@ import { recordGameResult } from "../settlement";
 import { createGameFeeJobInTx } from "../../affiliates/commissions";
 import { activateReferral } from "../../referrals/referrals.service";
 
-const QUEUE_TTL_MS = 5 * 60 * 1000;
+// A waiting player must actively poll to keep the lease alive. This prevents a
+// disconnected/kicked browser from remaining matchable for the old 5-minute TTL.
+const QUEUE_TTL_MS = 15_000;
 const SIGNAL_DELAY_MS = [1000, 2000, 3000, 4000, 5000];
 const REACTION_TAP_TIMEOUT_MS = 20_000;
 export type MatchGameType = "dice_clash" | "pvp_coinflip" | "reaction_tap";
@@ -28,7 +30,15 @@ export async function joinQueue(userId: string, gameType: MatchGameType, stake: 
     const entry = await db.matchmakingQueue.findFirst({ where: { userId, gameType, matchId: activeMatch.id } });
     return { status: "matched" as const, queueId: entry?.id ?? "", matchId: activeMatch.id };
   }
-  const existing = await db.matchmakingQueue.findFirst({ where: { userId, gameType, stake, status: "waiting" } });
+
+  const now = new Date();
+  // Never reuse an expired waiting entry. A request arriving after expiry gets a
+  // fresh lease instead of being attached to a stale/kicked matchmaking attempt.
+  await db.matchmakingQueue.updateMany({
+    where: { userId, gameType, stake, status: "waiting", expiresAt: { lte: now } },
+    data: { status: "cancelled" },
+  });
+  const existing = await db.matchmakingQueue.findFirst({ where: { userId, gameType, stake, status: "waiting", expiresAt: { gt: now } } });
   if (existing) return { status: "waiting" as const, queueId: existing.id };
 
   const [enabled, maintenance, configuredStakes] = await Promise.all([
@@ -40,13 +50,13 @@ export async function joinQueue(userId: string, gameType: MatchGameType, stake: 
   if (maintenance) throw Object.assign(new Error(`${gameType} is under maintenance`), { statusCode: 503, code: "GAME_MAINTENANCE" });
   if (configuredStakes.length && !configuredStakes.includes(stake)) throw Object.assign(new Error(`Stake $${stake} is not available for this game`), { statusCode: 400, code: "INVALID_STAKE" });
 
-  const opponent = await db.matchmakingQueue.findFirst({ where: { gameType, stake, status: "waiting", userId: { not: userId }, expiresAt: { gt: new Date() } }, orderBy: { createdAt: "asc" } });
+  const opponent = await db.matchmakingQueue.findFirst({ where: { gameType, stake, status: "waiting", userId: { not: userId }, expiresAt: { gt: now } }, orderBy: { createdAt: "asc" } });
   if (!opponent) {
     const entry = await db.matchmakingQueue.create({ data: { userId, gameType, stake, status: "waiting", expiresAt: new Date(Date.now() + QUEUE_TTL_MS) } });
     return { status: "waiting" as const, queueId: entry.id };
   }
 
-  const claimed = await db.matchmakingQueue.updateMany({ where: { id: opponent.id, status: "waiting" }, data: { status: "matched" } });
+  const claimed = await db.matchmakingQueue.updateMany({ where: { id: opponent.id, status: "waiting", expiresAt: { gt: now } }, data: { status: "matched" } });
   if (!claimed.count) {
     const entry = await db.matchmakingQueue.create({ data: { userId, gameType, stake, status: "waiting", expiresAt: new Date(Date.now() + QUEUE_TTL_MS) } });
     return { status: "waiting" as const, queueId: entry.id };
@@ -56,7 +66,7 @@ export async function joinQueue(userId: string, gameType: MatchGameType, stake: 
   try {
     match = await createMatchForPlayers(userId, opponent.userId, gameType, stake);
   } catch (err) {
-    await db.matchmakingQueue.updateMany({ where: { id: opponent.id, status: "matched", matchId: null }, data: { status: "waiting" } });
+    await db.matchmakingQueue.updateMany({ where: { id: opponent.id, status: "matched", matchId: null }, data: { status: "waiting", expiresAt: new Date(Date.now() + QUEUE_TTL_MS) } });
     throw err;
   }
   await db.matchmakingQueue.update({ where: { id: opponent.id }, data: { matchId: match.id } });
@@ -69,12 +79,32 @@ export async function getQueueStatus(userId: string, queueId: string) {
   const entry = await db.matchmakingQueue.findFirst({ where: { id: queueId, userId } });
   if (!entry) throw Object.assign(new Error("Queue entry not found"), { statusCode: 404, code: "NOT_FOUND" });
   if (entry.status === "matched" && entry.matchId) return { status: "matched" as const, matchId: entry.matchId };
-  if (entry.status === "cancelled" || new Date() > entry.expiresAt) return { status: "cancelled" as const };
+  if (entry.status === "cancelled" || new Date() > entry.expiresAt) {
+    if (entry.status === "waiting") await db.matchmakingQueue.updateMany({ where: { id: queueId, userId, status: "waiting" }, data: { status: "cancelled" } });
+    return { status: "cancelled" as const };
+  }
+  // Polling is also the queue heartbeat. A connected player keeps the lease alive;
+  // a disconnected/kicked player stops polling and becomes unmatchable within 15s.
+  await db.matchmakingQueue.updateMany({ where: { id: queueId, userId, status: "waiting" }, data: { expiresAt: new Date(Date.now() + QUEUE_TTL_MS) } });
   return { status: "waiting" as const };
 }
 
 export async function leaveQueue(userId: string, queueId: string) {
   await db.matchmakingQueue.updateMany({ where: { id: queueId, userId, status: "waiting" }, data: { status: "cancelled" } });
+}
+
+async function createGameNotification(tx: any, userId: string, won: boolean, gameName: string, stake: number, payout: number, opponentId: string) {
+  await tx.notification.create({
+    data: {
+      userId,
+      type: won ? "game_win" : "game_loss",
+      title: won ? `🎉 ${gameName} Victory!` : `${gameName} Result`,
+      message: won
+        ? `You won $${payout.toFixed(2)} after staking $${stake.toFixed(2)}.`
+        : `You lost $${stake.toFixed(2)} in ${gameName}.`,
+      metadata: JSON.stringify({ game: gameName.toLowerCase().replace(/\s+/g, "_"), stake, payout, opponentId }),
+    },
+  });
 }
 
 /** Atomically creates the funded match. A failed insert/debit rolls the whole funding operation back. */
@@ -115,8 +145,11 @@ async function resolveDiceClash(matchId: string, p1Id: string, p2Id: string, sta
     if (!guard.count) return;
     await creditWallet(tx, winnerId, "game", payout);
     await writeLedgerEntry(tx, { userId: winnerId, type: "game_win", toWallet: "game", amount: payout, description: "Dice Clash win", referenceId: matchId, referenceType: "pvp_match" });
+    await writeLedgerEntry(tx, { userId: loserId, type: "game_loss", fromWallet: "game", amount: stake, description: "Dice Clash loss", referenceId: matchId, referenceType: "pvp_match" });
     await recordGameResult({ tx, userId: winnerId, gameType: "dice_clash", wagered: stake, won: true, payout });
     await recordGameResult({ tx, userId: loserId, gameType: "dice_clash", wagered: stake, won: false, payout: 0 });
+    await createGameNotification(tx, winnerId, true, "Dice Clash", stake, payout, loserId);
+    await createGameNotification(tx, loserId, false, "Dice Clash", stake, 0, winnerId);
     const userFee = stake * feeRate;
     await createGameFeeJobInTx(tx, { userId: winnerId, userFee, isMultiGame: false, eventRefId: matchId });
     await createGameFeeJobInTx(tx, { userId: loserId, userFee, isMultiGame: false, eventRefId: matchId });
@@ -134,8 +167,11 @@ async function resolveCoinFlip(matchId: string, p1Id: string, p2Id: string, stak
     if (!guard.count) return;
     await creditWallet(tx, winnerId, "game", payout);
     await writeLedgerEntry(tx, { userId: winnerId, type: "game_win", toWallet: "game", amount: payout, description: "Coin Flip win", referenceId: matchId, referenceType: "pvp_match" });
+    await writeLedgerEntry(tx, { userId: loserId, type: "game_loss", fromWallet: "game", amount: stake, description: "Coin Flip loss", referenceId: matchId, referenceType: "pvp_match" });
     await recordGameResult({ tx, userId: winnerId, gameType: "pvp_coinflip", wagered: stake, won: true, payout });
     await recordGameResult({ tx, userId: loserId, gameType: "pvp_coinflip", wagered: stake, won: false, payout: 0 });
+    await createGameNotification(tx, winnerId, true, "Coin Flip", stake, payout, loserId);
+    await createGameNotification(tx, loserId, false, "Coin Flip", stake, 0, winnerId);
     const userFee = stake * feeRate;
     await createGameFeeJobInTx(tx, { userId: winnerId, userFee, isMultiGame: false, eventRefId: matchId });
     await createGameFeeJobInTx(tx, { userId: loserId, userFee, isMultiGame: false, eventRefId: matchId });
@@ -191,7 +227,12 @@ async function resolveReactionTap(matchId: string, p1Id: string, p2Id: string, s
     await db.$transaction(async tx => {
       const guard = await tx.pvpMatch.updateMany({ where: { id: matchId, status: "active" }, data: { status: "cancelled", resultData: JSON.stringify({ p1TapMs: p1Tap, p2TapMs: p2Tap, void: true }), settledAt: new Date() } });
       if (!guard.count) return;
-      for (const pid of [p1Id, p2Id]) { await creditWallet(tx, pid, "game", stake); await writeLedgerEntry(tx, { userId: pid, type: "transfer", toWallet: "game", amount: stake, description: "Reaction Tap void — refund", referenceId: matchId, referenceType: "pvp_match" }); await recordGameResult({ tx, userId: pid, gameType: "reaction_tap", wagered: stake, won: false, payout: stake }); }
+      for (const pid of [p1Id, p2Id]) {
+        await creditWallet(tx, pid, "game", stake);
+        await writeLedgerEntry(tx, { userId: pid, type: "transfer", toWallet: "game", amount: stake, description: "Reaction Tap void — refund", referenceId: matchId, referenceType: "pvp_match" });
+        await recordGameResult({ tx, userId: pid, gameType: "reaction_tap", wagered: stake, won: false, payout: stake });
+        await createGameNotification(tx, pid, false, "Reaction Tap", stake, stake, pid === p1Id ? p2Id : p1Id);
+      }
     });
     return;
   }
@@ -205,8 +246,11 @@ async function resolveReactionTap(matchId: string, p1Id: string, p2Id: string, s
     if (!guard.count) return;
     await creditWallet(tx, winnerId, "game", payout);
     await writeLedgerEntry(tx, { userId: winnerId, type: "game_win", toWallet: "game", amount: payout, description: "Reaction Tap win", referenceId: matchId, referenceType: "pvp_match" });
+    await writeLedgerEntry(tx, { userId: loserId, type: "game_loss", fromWallet: "game", amount: stake, description: "Reaction Tap loss", referenceId: matchId, referenceType: "pvp_match" });
     await recordGameResult({ tx, userId: winnerId, gameType: "reaction_tap", wagered: stake, won: true, payout });
     await recordGameResult({ tx, userId: loserId, gameType: "reaction_tap", wagered: stake, won: false, payout: 0 });
+    await createGameNotification(tx, winnerId, true, "Reaction Tap", stake, payout, loserId);
+    await createGameNotification(tx, loserId, false, "Reaction Tap", stake, 0, winnerId);
   });
 }
 
