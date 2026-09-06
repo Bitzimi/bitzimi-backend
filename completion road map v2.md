@@ -142,6 +142,11 @@ This is the existing master roadmap. No second roadmap has been created.
 - [✓] **Additional requirement discovered during implementation:** private-room join/start/rematch transitions use row locking and a `starting` claim state so concurrent start requests cannot create duplicate funded matches.
 - [✓] **Additional requirement discovered during implementation:** Spin Battle settlement now persists the exact player/stake inputs used for the weighted Provably Fair calculation so the result can be independently verified.
 - [✓] **Additional requirement discovered during implementation:** the Phase 1 admin proof service syntax regression found during the Phase 2 audit was corrected and the production build re-verified.
+- [✓] **Additional requirement discovered during Phase 2 verification:** game rate limiting is now keyed by authenticated user and the games scope allows sufficient polling capacity; users sharing one IP no longer consume the same game-rate bucket.
+- [✓] **Additional requirement discovered during Phase 2 verification:** 1v1 matchmaking uses a 15-second waiting lease renewed by authenticated queue polling; expired/disconnected/kicked players cannot remain matchable as ghost opponents.
+- [✓] **Additional requirement discovered during Phase 2 verification:** Coin Flip, Dice Clash and Reaction Tap settlements now record explicit winner/loss wallet-history entries and backend-authoritative win/loss notifications atomically with settlement.
+- [✓] **Additional requirement discovered during Phase 2 verification:** frontend wallet history preserves `game_bet` correctly and consumes backend `game_loss`; legacy optimistic game notifications are deduplicated against backend settlement notifications.
+- [✓] **Additional requirement discovered during Phase 2 verification:** final backend build/typecheck and Render production deployment were re-verified after the above fixes; frontend production deployments for the corresponding transaction/notification changes reached Vercel `READY`.
 
 # Phase 3 — Football AI [ ]
 - [ ] Backend-authoritative VIP entitlement; client/query `isVip` cannot grant access.
