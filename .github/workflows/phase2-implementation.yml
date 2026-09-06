@@ -1,0 +1,199 @@
+name: Phase 2 implementation
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  implement:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Apply Phase 2 hardening
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          mig = Path('prisma/migrations/20260906180000_phase2_game_integrity/migration.sql')
+          mig.parent.mkdir(parents=True, exist_ok=True)
+          mig.write_text('''-- Phase 2 game integrity: durable concurrency guards and dice-round player invariants.
+CREATE UNIQUE INDEX IF NOT EXISTS matchmaking_waiting_user_game_stake_uq
+  ON matchmaking_queues (user_id, game_type, stake)
+  WHERE status = 'waiting';
+
+CREATE UNIQUE INDEX IF NOT EXISTS dice_round_one_active_per_game_stake_uq
+  ON dice_rounds (game_type, stake)
+  WHERE status IN ('open','countdown','locked','rolling');
+
+CREATE OR REPLACE FUNCTION bitzimi_merge_dice_players()
+RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  merged jsonb;
+BEGIN
+  SELECT COALESCE(jsonb_agg(value ORDER BY ord), '[]'::jsonb)
+    INTO merged
+    FROM (
+      SELECT value, min(ord) AS ord
+      FROM (
+        SELECT value, ord FROM jsonb_array_elements_text(COALESCE(OLD.player_ids::jsonb, '[]'::jsonb)) WITH ORDINALITY
+        UNION ALL
+        SELECT value, 1000000 + ord FROM jsonb_array_elements_text(COALESCE(NEW.player_ids::jsonb, '[]'::jsonb)) WITH ORDINALITY
+      ) u
+      GROUP BY value
+    ) d;
+  IF jsonb_array_length(merged) > NEW.max_players THEN
+    RAISE EXCEPTION 'DICE_ROUND_FULL';
+  END IF;
+  NEW.player_ids := merged::text;
+  RETURN NEW;
+END; $$;
+
+DROP TRIGGER IF EXISTS dice_round_player_merge ON dice_rounds;
+CREATE TRIGGER dice_round_player_merge
+BEFORE UPDATE OF player_ids ON dice_rounds
+FOR EACH ROW EXECUTE FUNCTION bitzimi_merge_dice_players();
+''')
+
+          p = Path('src/modules/games/provablyFair.ts')
+          s = p.read_text()
+          old = re.search(r'/\*\*\n \* Spin Battle winner:.*?\nexport function deriveSpinWinner\([\s\S]*?\n}\n', s)
+          new = '''/**
+ * Spin Battle winner: stake-proportional probability.
+ * The player weight is their actual locked stake in the round.
+ * Sampling uses rejection over a 64-bit HMAC value to avoid modulo bias.
+ */
+export function deriveSpinWinner(
+  serverSeed: string,
+  clientSeed: string,
+  nonce: number,
+  sortedPlayerIds: string[],
+  playerWeights: Record<string, number> = {},
+): string {
+  if (sortedPlayerIds.length === 0) throw new Error("Spin Battle requires at least one player");
+  const scale = 1_000_000;
+  const weights = sortedPlayerIds.map(id => Math.max(0, Math.round((playerWeights[id] ?? 0) * scale)));
+  const total = weights.reduce((a, b) => a + b, 0);
+  if (total <= 0) throw new Error("Spin Battle requires positive player stakes");
+
+  const TWO64 = 18446744073709551616n;
+  for (let attempt = 0; attempt < 16; attempt++) {
+    const b = getResultBytes(serverSeed, clientSeed, nonce + attempt);
+    const x = (BigInt(uint32At(b, 0)) << 32n) | BigInt(uint32At(b, 1));
+    const totalBig = BigInt(total);
+    const limit = (TWO64 / totalBig) * totalBig;
+    if (x >= limit) continue;
+    let cursor = Number(x % totalBig);
+    for (let i = 0; i < weights.length; i++) {
+      if (cursor < weights[i]) return sortedPlayerIds[i];
+      cursor -= weights[i];
+    }
+  }
+  return sortedPlayerIds[weights.findIndex(w => w > 0)];
+}
+'''
+          if not old:
+              raise SystemExit('Could not locate deriveSpinWinner block')
+          p.write_text(s[:old.start()] + new + s[old.end():])
+
+          p = Path('src/modules/games/spinBattle/spinBattle.service.ts')
+          s = p.read_text()
+          old = '''  // Derive provably-fair result before opening the transaction (pure computation, no DB writes)
+  const sortedPlayerIds = [...state.players].sort();
+  const clientSeed      = generateClientSeed(...sortedPlayerIds, state.roundId);
+  const winnerId        = deriveSpinWinner(state.serverSeed, clientSeed, state.roundNumber, sortedPlayerIds);
+
+  // Read bets and fee rate before the transaction (immutable once round is locked)
+  const _dec = (v: unknown) => (typeof v === "number" ? v : parseFloat(String(v ?? 0)));
+  const bets = await db.gameBet.findMany({ where: { roundId: state.roundId, settled: false } });
+  const totalPool    = bets.reduce((s, b) => s + _dec(b.amount), 0);
+  const feeRate      = await getGameFeeRate("spin_battle");
+  const fee          = totalPool * feeRate;
+  const winnerPayout = totalPool - fee;
+  const playerBets   = new Map<string, number>(bets.map(b => [b.userId, _dec(b.amount)]));
+  const loserIds     = state.players.filter(id => id !== winnerId);
+'''
+          new = '''  // Read the locked bets first; the actual stake is the authoritative winner weight.
+  const _dec = (v: unknown) => (typeof v === "number" ? v : parseFloat(String(v ?? 0)));
+  const bets = await db.gameBet.findMany({ where: { roundId: state.roundId, settled: false } });
+  const totalPool    = bets.reduce((s, b) => s + _dec(b.amount), 0);
+  const feeRate      = await getGameFeeRate("spin_battle");
+  const fee          = totalPool * feeRate;
+  const winnerPayout = totalPool - fee;
+  const playerBets   = new Map<string, number>(bets.map(b => [b.userId, _dec(b.amount)]));
+  const sortedPlayerIds = [...state.players].sort();
+  const weightObject: Record<string, number> = Object.fromEntries(sortedPlayerIds.map(id => [id, playerBets.get(id) ?? 0]));
+  const clientSeed = generateClientSeed(...sortedPlayerIds.map(id => `${id}:${weightObject[id]}`), state.roundId);
+  const winnerId = deriveSpinWinner(state.serverSeed, clientSeed, state.roundNumber, sortedPlayerIds, weightObject);
+  const loserIds = state.players.filter(id => id !== winnerId);
+'''
+          if old not in s:
+              raise SystemExit('Could not locate Spin settlement preamble')
+          s = s.replace(old, new, 1)
+          s = s.replace('JSON.stringify({ winner: winnerId, fee, winnerPayout, countdownStartedAt: state.countdownStartedAt })', 'JSON.stringify({ winner: winnerId, fee, winnerPayout, countdownStartedAt: state.countdownStartedAt, playerBets: weightObject, playerIds: sortedPlayerIds, roundId: state.roundId })', 1)
+          p.write_text(s)
+
+          p = Path('src/modules/games/provablyFair.ts')
+          s = p.read_text()
+          old = '''      case "spin_battle": {
+        explanation    = `Winner index = uint32(bytes[0..4]) % playerCount. Requires player list to fully verify.`;
+        computedResult = null;
+        resultValid    = null; // need player list
+        break;
+      }'''
+          new = '''      case "spin_battle": {
+        const weights = input.claimedResult?.playerBets as Record<string, number> | undefined;
+        const playerIds = input.claimedResult?.playerIds as string[] | undefined;
+        if (!weights || !playerIds?.length) {
+          explanation = `Stake-proportional winner requires the settled player list and each locked stake.`;
+          computedResult = null;
+          resultValid = null;
+          break;
+        }
+        const ordered = [...playerIds].sort();
+        const weightObject = Object.fromEntries(ordered.map(id => [id, Number(weights[id] ?? 0)]));
+        const winner = deriveSpinWinner(input.serverSeed, input.clientSeed, input.nonce, ordered, weightObject);
+        computedResult = { winner };
+        resultValid = input.claimedResult?.winner ? winner === input.claimedResult.winner : null;
+        explanation = `Winner is selected from locked player stakes using unbiased 64-bit HMAC sampling; probability equals stake / total stake.`;
+        break;
+      }'''
+          if old not in s:
+              raise SystemExit('Could not locate Spin fairness case')
+          p.write_text(s.replace(old, new, 1))
+
+          p = Path('src/modules/games/provablyFair.routes.ts')
+          s = p.read_text()
+          old = '          claimedResult:  parsed.result ?? parsed.winner ?? null,\n        });'
+          new = '          claimedResult:  round.gameType === "spin_battle" ? { ...parsed, roundId: round.id } : (parsed.result ?? parsed.winner ?? null),\n        });'
+          if old not in s:
+              raise SystemExit('Could not locate fairness route claim block')
+          s = s.replace(old, new, 2)
+          p.write_text(s)
+          PY
+      - name: Typecheck backend
+        run: |
+          npm ci
+          npx prisma generate
+          npm run typecheck
+      - name: Commit Phase 2 backend changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add prisma/migrations src/modules/games
+          git commit -m "Phase 2: harden game fairness and durable game integrity" || true
+          git push
+      - name: Remove one-time workflow
+        if: success()
+        run: |
+          rm -f .github/workflows/phase2-implementation.yml
+          git add .github/workflows/phase2-implementation.yml
+          git commit -m "Remove one-time Phase 2 implementation workflow" || true
+          git push
