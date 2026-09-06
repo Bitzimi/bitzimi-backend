@@ -1,6 +1,6 @@
 # BitZimi — Completion Roadmap
 
-**Updated:** 2026-09-05  
+**Updated:** 2026-09-06  
 **Based on:** `audit report.md` full-platform re-audit and subsequent business-rule corrections  
 **Purpose:** Master implementation sequence for making the entire BitZimi user platform and entire Admin Panel complete, secure, consistent, testable and production-ready.
 
@@ -96,10 +96,12 @@ Establish one trustworthy identity source and secure account authentication and 
 - Resend cooldown.
 - Per-user/per-phone/per-IP rate limits.
 - Phone normalization.
-- Integrate the selected real SMS provider.
-- Verify OTP entirely on backend.
+- Integrate the selected real SMS provider: **Contiguity managed OTP API**.
+- Configure the BitZimi provider/account sender/name settings according to Contiguity's supported sender configuration; do not assume a carrier alphanumeric Sender ID until provider approval is confirmed.
+- Verify OTP entirely on backend through Contiguity.
+- Store only the provider challenge/OTP reference needed for verification, not the raw OTP.
 - Store verified timestamp.
-- Invalidate previous OTPs after successful verification.
+- Invalidate previous OTP challenges after successful verification.
 - Prevent client from submitting `phoneVerified=true`.
 - Controlled re-verification when changing a verified phone number.
 - Audit privileged phone-verification changes.
@@ -508,10 +510,106 @@ Attribution remains correct from registration through qualifying activity and ev
 
 ---
 
-# Phase 9 — Wallet, Ledger & Complete Financial System
+# Phase 9 — Wallet, Ledger, Deposits, Withdrawals & Complete Financial Gateway System
 
 ## Objective
-Correct financial representation and reconcile every money-moving feature, including the withdrawal phone-verification gate.
+Correct financial representation and complete every money-moving feature using the authoritative gateway architecture, while keeping USD as BitZimi's internal/base accounting currency and keeping display currency separate from transaction currency.
+
+## Canonical currency architecture
+- **USD is the internal/base accounting currency.**
+- User Settings currency is **display-only** and must never be treated as the user's deposit/withdrawal rail.
+- Display currency may include **NGN, KES, ZAR, GHS, USD and GBP**.
+- Deposit/withdrawal currency is a separate backend-controlled transaction capability determined by configured gateway rails.
+- Store transaction currency, gross amount, fee, net amount, FX rate/source and converted base-USD amount for every applicable financial transaction.
+- Historical transactions must retain their original recorded FX rate and amounts; never recompute historical values from today's rate.
+- Do not expose a currency in a transaction flow merely because it exists in Settings.
+
+## Kora gateway integration
+- Current payment gateway: **Kora**.
+- Replace the current placeholder/manual deposit architecture with a real Kora collection flow where the selected rail is supported and enabled.
+- Replace provider-less/manual withdrawal execution with Kora payout requests and asynchronous status handling.
+- Keep provider credentials/secrets server-side only.
+- Add Kora provider references and idempotency keys to transaction records.
+- Verify Kora webhook authenticity/signatures according to the current Kora integration requirements.
+- Process webhooks idempotently and make replay handling safe.
+- Query Kora transaction status when required for reconciliation or uncertain webhook states.
+- Never credit or finalize money solely from a client response.
+
+## Deposit rollout
+### NGN — ACTIVE
+- Kora NGN virtual account/bank-transfer collection.
+- Verify successful Kora transaction/webhook before crediting the user's wallet.
+
+### KES — ACTIVE
+- Kora KES virtual-account collection where enabled for the merchant/account.
+- Handle asynchronous virtual-account creation and transaction webhooks/query lifecycle.
+
+### GHS — ACTIVE WHEN THE KORA MERCHANT RAIL IS ENABLED
+- Use the Kora-supported Ghana collection rail configured for BitZimi, including the documented pool-account/mobile-money capability where applicable.
+- Treat Kora beta/merchant-activation requirements as configuration gates, not assumptions.
+
+### ZAR — ACTIVE WHEN THE KORA MERCHANT RAIL IS ENABLED
+- Use the Kora-supported South African collection rail configured for BitZimi, including the documented pool-account/EFT capability where applicable.
+- Treat Kora beta/merchant-activation requirements as configuration gates, not assumptions.
+
+### USD — INTEGRATED BUT ON HOLD
+- Build the USD deposit architecture and Kora USD virtual-account integration points.
+- **Do not activate USD deposits in production until Kora confirms/activates USD collection for the BitZimi merchant account.**
+- The current Kora USD virtual-account capability is documented as beta, so it must remain feature-flagged/disabled until merchant availability is confirmed.
+- Once confirmed, enable the USD deposit rail through configuration/feature flag without redesigning the financial architecture.
+
+### GBP — NOT AVAILABLE FOR DEPOSIT YET
+- Do not expose or activate GBP deposit through Kora while Kora does not provide a confirmed GBP deposit/collection rail for BitZimi.
+- Keep the architecture extensible so GBP deposit can be added later when Kora officially supports/activates it.
+
+## Withdrawal rollout
+### NGN — ACTIVE
+- Kora Nigerian bank payout.
+
+### KES — ACTIVE
+- Kora Kenyan bank payout.
+
+### ZAR — ACTIVE
+- Kora South African bank payout.
+
+### GHS — ACTIVE WHERE THE SELECTED KORA PAYOUT RAIL IS ENABLED
+- Kora Ghana payout support currently documented through mobile money.
+- Do not assume Ghana bank payout if the enabled Kora merchant rail does not support it.
+
+### USD — ACTIVE
+- Kora USD bank payout.
+- Capture all Kora-required international payout fields where applicable, including bank country, bank name, beneficiary details, account/IBAN, routing/payment method, bank address, purpose of payment and supporting documents where required.
+
+### GBP — ACTIVE
+- Kora GBP bank payout.
+- Capture Kora-required GBP payout information such as bank country, bank details, IBAN/Sort Code and other required beneficiary/payment fields.
+- **GBP withdrawal is active even though GBP deposit is not yet supported.**
+
+## Withdrawal lifecycle
+- When Withdraw is clicked, enforce the authoritative phone-verification gate.
+- If phone is unverified, automatically open phone verification and continue to withdrawal after successful verification.
+- If phone is already verified, continue directly without repeating verification.
+- Validate supported withdrawal currency/rail server-side.
+- Validate balance and limits atomically.
+- Reserve/lock the required funds before submitting the payout.
+- Create a unique idempotency key/provider reference.
+- Submit the Kora payout request.
+- Keep the withdrawal pending until Kora confirms the final state.
+- On success, finalize the reserved funds and immutable ledger entries.
+- On failure/rejection, release the reservation and record the failure reason.
+- Handle pending/unknown states through webhook/query reconciliation rather than guessing.
+- Prevent duplicate payouts from double clicks, retries, webhook replay or worker restart.
+
+## Deposit lifecycle
+- Create a transaction/reference before collection where required.
+- Use the correct Kora rail for the selected transaction currency.
+- Never credit user funds from frontend-only confirmation.
+- Validate webhook authenticity.
+- Match provider reference/customer/reference/narration to the correct BitZimi transaction.
+- Credit only verified successful provider transactions.
+- Make webhook processing exactly-once/idempotent.
+- Handle pending, failed, reversed and disputed states.
+- Reconcile gateway transactions against internal ledger and Kora merchant balances.
 
 ## Data model
 - Replace Float monetary fields with exact financial representation.
@@ -519,6 +617,8 @@ Correct financial representation and reconcile every money-moving feature, inclu
 - Remove legacy `main` wallet.
 - Maintain Game/Task/Referral/Affiliate/Ambassador spendable balances.
 - Separate Task Vault conceptually and operationally from spendable wallet.
+- Add transaction currency, base-USD amount, FX rate, fee and provider metadata where required.
+- Add provider transaction/reference IDs and unique idempotency constraints.
 - Add required constraints/indexes.
 
 ## Financial lifecycle
@@ -530,8 +630,8 @@ Correct financial representation and reconcile every money-moving feature, inclu
 - Webhook idempotency.
 - Withdrawals.
 - Fees/net amounts.
-- Minimum/maximum limits.
-- Daily/monthly reset.
+- Minimum/maximum limits from backend/gateway configuration rather than hardcoded frontend NGN values.
+- Daily/monthly limits where applicable.
 - PIN security.
 - Provider processing.
 - Failure/reversal handling.
@@ -544,26 +644,24 @@ Correct financial representation and reconcile every money-moving feature, inclu
 - Promotion/reward settlement.
 - Referral/affiliate/ambassador settlement.
 
-## Withdrawal phone gate
-- When user clicks Withdraw, check authoritative phone-verification state.
-- If verified, continue directly to normal withdrawal.
-- If not verified, automatically open phone verification first.
-- After successful verification, continue automatically to the normal withdrawal flow.
-- Never ask again merely because another withdrawal is being started when the phone remains verified.
-- Keep this gate reusable and independent from KYC/VIP logic.
-
-## Admin
-- Wallet dashboard/explorer.
-- Credit/debit.
-- Freeze/unfreeze.
-- Deposit confirmation.
-- Withdrawal processing.
+## Admin Financials
+- Deposits dashboard.
+- Withdrawals dashboard.
+- Wallet explorer.
 - Transaction explorer.
-- Reconciliation.
+- Provider reference/status visibility.
+- Currency and transaction-rail visibility.
+- Gross/fee/net/base-USD amounts and recorded FX rate.
+- Kora webhook/reconciliation status.
+- Failed/pending/unknown transaction investigation.
+- Deposit confirmation only where a legitimate manual-review state remains; manual confirmation must not bypass provider verification for gateway transactions.
+- Withdrawal processing/reconciliation.
+- Credit/debit adjustments.
+- Freeze/unfreeze.
 - Mandatory reason/audit for privileged adjustments.
 
 ## Completion gate
-Wallet balances and ledger reconcile exactly across every domain under concurrent operations, with no binary floating-point accounting and no spendable Task Vault/main wallet contamination; withdrawal phone gating behaves exactly once per verified phone state.
+Wallet balances and ledger reconcile exactly across every domain under concurrent operations, with no binary floating-point accounting, no spendable Task Vault/main-wallet contamination, no duplicate gateway payout/credit, and no unsupported currency presented as an active transaction rail. USD remains the internal/base currency; USD deposit stays disabled until Kora merchant availability is confirmed; GBP withdrawal is active while GBP deposit remains unavailable.
 
 ---
 
@@ -643,6 +741,8 @@ Audit and finish every Admin Panel surface, not merely the navigation, with stri
 - Withdrawals.
 - Wallet explorer.
 - Ledger/reconciliation.
+- Kora provider status/reference visibility.
+- Currency/rail configuration.
 - Privileged adjustment controls.
 
 ### Tasks/Proofs
@@ -700,13 +800,20 @@ Audit and finish every Admin Panel surface, not merely the navigation, with stri
 - Global configuration.
 - Feature flags.
 - Currency configuration.
+- Deposit/withdrawal rail configuration.
+- Gateway availability/activation flags.
 - Per-game settings.
 - Controlled rollout.
+- Separate display-currency catalog from transaction-currency/rail capabilities.
+- USD deposit activation must remain disabled until Kora merchant confirmation.
+- GBP deposit remains unavailable until Kora officially supports it.
+- GBP withdrawal remains enabled as a supported payout rail.
 
 ### Audit/Security
 - Immutable audit records.
 - Authentication/security events.
 - Privileged actions.
+- Payment webhook/audit events.
 - Suspicious activity monitoring.
 
 ### AI Developer Center
@@ -737,6 +844,7 @@ Remove structural production risks that cut across all platform features.
 - Enforce ownership and foreign keys.
 - Exact monetary types.
 - Durable idempotency records.
+- Provider transaction/reference uniqueness.
 - Audit records.
 - Safe migration strategy.
 
@@ -751,7 +859,7 @@ Remove structural production risks that cut across all platform features.
 - Input validation.
 - File-upload security.
 - Secrets/configuration hygiene.
-- Webhook authentication.
+- Kora/Didit/Contiguity webhook and callback authentication.
 - Audit security-sensitive mutations.
 
 ## Runtime
@@ -764,6 +872,7 @@ Remove structural production risks that cut across all platform features.
 - Error handling.
 - Production-safe CORS/API configuration.
 - Remove localhost/empty API fallbacks from production paths.
+- Payment reconciliation worker and recovery path.
 
 ## Completion gate
 The platform survives restart, duplicate requests, provider failures and unauthorized requests without losing or fabricating business state.
@@ -778,7 +887,7 @@ Verify the whole platform as one connected system rather than testing isolated m
 ## Identity/KYC/VIP journeys
 - New user registration.
 - Email verification.
-- Phone verification independently.
+- Phone verification independently through Contiguity.
 - Verify Account with unverified phone → phone verification → KYC → Didit → KYC verified.
 - Verify Account with already verified phone → direct KYC.
 - KYC verified user remains non-VIP until subscription/grant.
@@ -786,6 +895,22 @@ Verify the whole platform as one connected system rather than testing isolated m
 - VIP expiry/cancellation.
 - Withdrawal with unverified phone → phone verification → withdrawal.
 - Withdrawal with already verified phone → direct withdrawal.
+
+## Payment/currency journeys
+- NGN deposit through Kora → verified webhook/query → USD base-ledger credit.
+- KES deposit through Kora → verified webhook/query → USD base-ledger credit.
+- GHS/ZAR deposit through the configured Kora collection rail when merchant-enabled.
+- USD deposit architecture remains disabled while Kora USD collection is unconfirmed/beta-gated.
+- GBP deposit is unavailable and cannot be selected.
+- NGN/KES/ZAR withdrawals through Kora.
+- GHS payout through the supported configured Kora rail.
+- USD bank payout through Kora.
+- GBP bank payout through Kora.
+- Currency display setting changes do not change transaction rails.
+- FX, fee, gross/net and base-USD amounts remain consistent and immutable per transaction.
+- Duplicate Kora webhooks do not duplicate credits.
+- Duplicate withdrawal requests do not duplicate payouts.
+- Failed/pending/reversed provider states reconcile correctly.
 
 ## Core platform journeys
 - Task creation/funding/review/completion/refund.
@@ -805,6 +930,7 @@ Verify the whole platform as one connected system rather than testing isolated m
 - Super Admin can perform authorized privileged role changes.
 - KYC review/override permissions.
 - Financial adjustment permissions.
+- Payment/currency configuration permissions.
 - Game/configuration permissions.
 - Audit records for all privileged actions.
 
@@ -818,9 +944,10 @@ Verify the whole platform as one connected system rather than testing isolated m
 - Database retry.
 - Midnight rollover.
 - Session invalidation.
+- Kora transaction query/reconciliation after uncertain webhook delivery.
 
 ## Completion gate
-Cross-domain E2E tests prove that the intended identity → KYC → VIP relationships, withdrawal phone gate, financial settlement and Admin privilege hierarchy work together in production-like conditions.
+Cross-domain E2E tests prove that the intended identity → KYC → VIP relationships, withdrawal phone gate, payment gateway lifecycle, currency rules, financial settlement and Admin privilege hierarchy work together in production-like conditions.
 
 ---
 
@@ -839,6 +966,9 @@ Close remaining gaps without introducing new architecture unnecessarily and cert
 - Re-check VIP subscription versus KYC eligibility.
 - Re-check withdrawal phone gating.
 - Re-check Super Admin/Admin role boundaries.
+- Re-check every active Kora deposit and withdrawal rail against current provider capabilities and merchant activation.
+- Re-check USD deposit feature flag remains disabled until confirmed.
+- Re-check GBP withdrawal is active and GBP deposit remains unavailable.
 
 ## Cleanup
 - Remove verified dead code.
@@ -853,10 +983,10 @@ Close remaining gaps without introducing new architecture unnecessarily and cert
 - Render.
 - Vercel.
 - Storage.
-- SMS provider.
+- SMS provider/Contiguity.
 - Email provider/Brevo.
-- Didit.
-- Payment providers.
+- KYC provider/Didit.
+- Payment provider/Kora.
 - External game/football providers where applicable.
 - Environment variables/secrets.
 - Monitoring/alerts.
@@ -873,6 +1003,12 @@ Close remaining gaps without introducing new architecture unnecessarily and cert
 - All ordinary Admin operations remain available within their assigned permissions.
 - All seven games and their required fairness rules work correctly.
 - Wallet/ledger reconciles across every money-moving domain.
+- Kora gateway integration is authoritative, idempotent, reconciled and feature-gated by actual merchant-supported rails.
+- NGN/KES/ZAR/GHS transaction capabilities are enabled only where their configured Kora rails are active.
+- USD remains the internal/base accounting currency.
+- USD withdrawal is active; USD deposit remains disabled until Kora confirms/activates collection for BitZimi.
+- GBP withdrawal is active; GBP deposit remains unavailable until Kora officially supports/activates it.
+- Settings currency remains display-only and cannot silently enable an unsupported transaction rail.
 - Admin Panel is fully functional and auditable.
 - Automated tests, E2E tests and production smoke tests pass.
 
@@ -880,4 +1016,4 @@ Close remaining gaps without introducing new architecture unnecessarily and cert
 
 # Roadmap Status Rule
 
-A phase is **Complete** only when its implementation, security checks, cross-layer integration, tests and verification gates pass. If a later audit discovers a business-rule mismatch, update the roadmap and audit report first, then implement the corrected rule rather than building on an incorrect assumption.
+A phase is **Complete** only when its implementation, security checks, cross-layer integration, tests and verification gates pass. If a later audit discovers a business-rule mismatch or a gateway capability changes, update the roadmap and audit report first, then implement the corrected rule rather than building on an incorrect assumption.
