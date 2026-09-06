@@ -10,19 +10,18 @@ This is the existing master roadmap. No second roadmap has been created.
 1. Before starting ANY phase, first read these Mandatory rules, the Canonical rules, and the complete checklist for that phase.
 2. When a phase starts, every item currently listed under it is in scope and must be audited before implementation.
 3. If code/dependency/business-logic verification discovers a requirement genuinely necessary to make the current phase complete but not already listed, implement it and explicitly add it under that phase as **Additional requirement discovered during implementation**. Do not add arbitrary work.
-4. Examples outside the roadmap, including “Admin approval API” or “Wiring of frontend with backend”, are not requirements unless actual audit proves they are necessary.
-5. A phase cannot become `[✓]` until every original and genuinely necessary additional item is implemented, tested, verified and re-tested where necessary.
-6. Backend is authoritative for identity, phone/KYC, VIP, financial state, game state, permissions, rewards and commissions.
-7. Never use localStorage as authority for identity, phone/KYC, VIP, balances, bets, settlements, rewards or financial status.
-8. Sensitive/privileged operations must be protected server-side.
-9. Money, rewards, commissions, verification and settlement require transactions, constraints and idempotency.
-10. Preserve existing BitZimi business rules and UX unless an audit finding requires correction.
-11. Remove duplicate/dead code only after dependency verification.
-12. Every phase ends: build/typecheck → tests → failure review → fixes → repeat verification.
-13. Phase completion requires the real business flow to work end-to-end, not merely compile.
-14. Provider capability and merchant activation must be verified before exposing a transaction rail.
-15. Settings currency is display-only and must never select/change a payment rail.
-16. After all original/additional items pass, immediately update this roadmap, mark the verified phase/items `[✓]`, and commit code + roadmap before moving on.
+4. A phase cannot become `[✓]` until every original and genuinely necessary additional item is implemented, tested, verified and re-tested where necessary.
+5. Backend is authoritative for identity, phone/KYC, VIP, financial state, game state, permissions, rewards and commissions.
+6. Never use localStorage as authority for identity, phone/KYC, VIP, balances, bets, settlements, rewards or financial status.
+7. Sensitive/privileged operations must be protected server-side.
+8. Money, rewards, commissions, verification and settlement require transactions, constraints and idempotency.
+9. Preserve existing BitZimi business rules and UX unless an audit finding requires correction.
+10. Remove duplicate/dead code only after dependency verification.
+11. Every phase ends: build/typecheck → tests → failure review → fixes → repeat verification.
+12. Phase completion requires the real business flow to work end-to-end, not merely compile.
+13. Provider capability and merchant activation must be verified before exposing a transaction rail.
+14. Settings currency is display-only and must never select/change a payment rail.
+15. After all original/additional items pass, immediately update this roadmap, mark the verified phase/items `[✓]`, and commit code + roadmap before moving on.
 
 ## Canonical identity, phone, KYC and VIP rules
 
@@ -294,61 +293,48 @@ Verify every admin page, route, API and mutation:
 - [ ] DB constraints/index review and legacy cleanup.
 - [ ] Exact monetary representation migration and constraints.
 - [ ] Durable OTP challenge storage and uniqueness constraints.
-- [ ] Rate limits for auth/OTP/password reset/KYC/financial/admin endpoints.
-- [ ] Upload/PII/logging security.
-- [ ] Session/replay protection and secure headers/CORS.
-- [ ] Durable worker scheduling/locking/retries/idempotency.
-- [ ] Remove process-local authoritative state, including game/auction/promotion/KYC/notification/crypto-deposit cursors and completion state.
+- [ ] Rate limits for auth, OTP, KYC, financial and abuse-sensitive operations.
+- [ ] Upload/PII/logging security and retention controls.
+- [ ] Session, replay, security headers and CORS hardening.
+- [ ] Durable workers, locks, retries and idempotency for critical jobs.
+- [ ] Remove process-local state from business-critical workflows.
 - [ ] Game restart and Render multi-instance recovery.
-- [ ] Verify Vercel/Render/Supabase/storage/SMS/email/payment/football providers and production env variables.
-- [ ] Verify Kora merchant activation separately for every enabled collection/payout rail.
-- [ ] Verify Kora webhook authenticity, provider-reference reconciliation and status-query recovery.
-- [ ] Verify blockchain checkpoint/replay recovery for crypto deposits and payouts.
-- [ ] Keep unsupported/unconfirmed rails disabled.
+- [ ] Verify Vercel, Render, Supabase, storage, SMS, email, payment and football provider integrations/env configuration.
+- [ ] Verify Kora merchant activation separately for every exposed rail.
+- [ ] Unsupported/unconfirmed payment rails remain disabled.
+- [ ] Durable auction, challenge, KYC, notification and crypto-monitor checkpoints.
+- [ ] Security audit of duplicate/legacy frontend trees before deletion.
 
 # Phase 15 — AI Developer Center [ ]
 - [ ] Real repository scans.
-- [ ] Issue classification/evidence.
-- [ ] Patch proposals and admin approval/rejection.
-- [ ] Verification/rollback.
-- [ ] CI/CD, scan history and monitoring.
-- [ ] Never represent mock scan output as real.
+- [ ] Issue classification with evidence.
+- [ ] Patch proposals with explicit admin approval/rejection.
+- [ ] Verification and rollback.
+- [ ] CI/CD integration, scan history and monitoring.
+- [ ] No mock scan output represented as real scan output.
 
 # Phase 16 — Dead Code / Duplication / Legacy Cleanup [ ]
-After dependency analysis:
-- [ ] Root `app/` duplicate frontend tree where proven unused.
-- [ ] Legacy `main` wallet.
+- [ ] Legacy main wallet.
 - [ ] Local identity/profile authority.
 - [ ] Simulated phone OTP.
-- [ ] Simulated/local KYC verification and local sensitive KYC progress.
-- [ ] Duplicate API/profile/proof/settlement logic.
+- [ ] Sensitive KYC localStorage.
+- [ ] Duplicate API/profile/proof/settlement implementations.
 - [ ] Obsolete static game/lobby configuration.
-- [ ] Local Spin Battle settlement/idempotency authority.
-- [ ] Obsolete manual Football paths conflicting with automatic AI.
-- [ ] Superseded local-only withdrawal dialogs/monitoring paths after dependency verification.
+- [ ] Obsolete manual Football paths.
 - [ ] Dead admin/game services/routes/components.
 - [ ] Obsolete DB fields/models/indexes.
 - [ ] Stale flags/phase comments.
 - [ ] Duplicate payment/deposit/withdrawal implementations.
+- [ ] Root `app/` versus active `src/app/` duplicate tree only after dependency verification.
 
 # Phase 17 — Automated Testing, E2E & Final Sign-Off [ ]
-- [ ] Backend unit/integration/authorization/financial/concurrency/KYC/phone/game/worker tests.
-- [ ] Frontend automated test framework and CI.
-- [ ] Full E2E: registration → email → login/2FA → independent phone → KYC/Didit → profile/settings → VIP → tasks → all games/fairness → Football AI → auction → referral/affiliate/ambassador → deposits/withdrawals/transfers/history → promotions/events/notifications → admin.
-- [ ] Settings E2E: language, display currency, password, Security PIN, bank details, USDT address and address security.
-- [ ] Payment E2E for enabled NGN/KES/ZAR/GHS rails, USD withdrawal and verified GBP withdrawal; USD deposit disabled pending Kora confirmation; GBP deposit unavailable.
-- [ ] Fiat/Kora deposit E2E: create → provider collection → pending → webhook/status confirmation → success/failure/reversal/dispute → replay.
-- [ ] Crypto/BEP-20 deposit E2E: session → exact amount → detection → confirmations → credit → expiry/failure → restart/replay.
-- [ ] Current WithdrawalWizard E2E: bank and crypto branches, phone gate, destination setup, PIN, amount/fee/limits, submission, pending/final states, failure/release and retry/recovery.
-- [ ] Withdrawal phone-gate E2E for unverified and already-verified users, including automatic return to original withdrawal flow.
-- [ ] Transfer idempotency/replay E2E.
-- [ ] Adversarial/security/concurrency/replay/idempotency/restart tests across every money/reward/commission/settlement flow.
-- [ ] Every Admin role tested against every privileged route/mutation.
-- [ ] Final gate: no unresolved P0; no P1 without accepted risk; canonical identity/phone/KYC/VIP rules verified; ledger reconciled; provider/infrastructure/security verified; audit report updated.
-- [ ] Final sign-off follows phase order 1 → 17.
-
----
-
-## Additional-requirement rule — mandatory for every phase
-
-During implementation of any phase, if actual code inspection, dependency analysis, business logic or verification reveals a requirement genuinely necessary to make that phase fully complete and it is not already listed, it must be implemented and explicitly added under that same phase as **Additional requirement discovered during implementation**. The new item must then be tested and verified before the phase can be marked `[✓]`. Unrelated improvements must not be added merely because they are desirable.
+- [ ] Backend unit/integration/auth/financial/concurrency/KYC/phone/game/worker tests.
+- [ ] Frontend test framework and CI.
+- [ ] Full E2E: registration → email → login/2FA → independent phone → KYC/Didit → profile → VIP → tasks → games/fairness → Football AI → auction → referrals → deposits/withdrawals → promotions/events/notifications → admin.
+- [ ] Payment E2E for enabled NGN/KES/ZAR/GHS rails, verified USD withdrawal and verified GBP withdrawal; USD deposit remains disabled pending Kora confirmation; GBP deposit unavailable.
+- [ ] Withdrawal phone gate: unverified and already-verified paths.
+- [ ] Deposit/withdrawal provider webhook, replay, retry, restart and reconciliation tests.
+- [ ] Crypto deposit/withdrawal on-chain confirmation and duplicate-protection tests.
+- [ ] Adversarial authorization, concurrency, replay, idempotency and privilege-escalation tests.
+- [ ] Final gate: no unresolved P0; no P1 without accepted risk; canonical rules verified; ledger reconciled; security and production integrations verified; final audit updated.
+- [ ] Final completion order: Phases 1 → 17.
