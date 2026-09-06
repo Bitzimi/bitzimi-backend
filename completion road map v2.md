@@ -111,16 +111,16 @@ This is the existing master roadmap. No second roadmap has been created.
 
 ---
 
-# Phase 1 — Task Marketplace, Creator, My Task & Proof [ ]
-- [ ] Enforce VIP + KYC `verified` eligibility server-side; phone is an inherent KYC prerequisite.
-- [ ] Full Task Wallet funding and Task Vault escrow lifecycle.
-- [ ] Correct approval/rejection, pause/resume/stop, completion and 35/45/65% reward tiers.
-- [ ] Force edited tasks back to admin review; creator cannot manipulate protected status/review state.
-- [ ] Complete Marketplace/My Task ownership and proof lifecycle.
-- [ ] AI-first proof verification, manual fallback and exactly-once reward settlement.
-- [ ] Secure proof/document ownership and storage.
-- [ ] Admin task/proof management and audit logging.
-- [ ] **Additional requirement discovered during full audit:** creator update paths must not accept a status mutation that can bypass the required review lifecycle.
+# Phase 1 — Task Marketplace, Creator, My Task & Proof [✓]
+- [✓] Enforce VIP + KYC `verified` eligibility server-side; phone is an inherent KYC prerequisite.
+- [✓] Full Task Wallet funding and Task Vault escrow lifecycle.
+- [✓] Correct approval/rejection, pause/resume/stop, completion and 35/45/65% reward tiers.
+- [✓] Force edited tasks back to admin review; creator cannot manipulate protected status/review state.
+- [✓] Complete Marketplace/My Task ownership and proof lifecycle.
+- [✓] AI-first proof verification, manual fallback and exactly-once reward settlement.
+- [✓] Secure proof/document ownership and storage.
+- [✓] Admin task/proof management and audit logging.
+- [✓] **Additional requirement discovered during full audit:** creator update paths must not accept a status mutation that can bypass the required review lifecycle.
 
 # Phase 2 — Games Center [ ]
 - [ ] Backend-authoritative rounds, stakes, timers, locks, results and settlement.
@@ -128,213 +128,116 @@ This is the existing master roadmap. No second roadmap has been created.
 - [ ] Complete Colour Prediction, Coin Flip, Dice Clash, Dice Royale, Dice Arena, Spin Battle and Reaction Tap.
 - [ ] Dice Royale highest-number rule.
 - [ ] Dice Arena top-two/60-40 rule.
-- [ ] Spin Battle stake-proportional probability and matching wheel display.
-- [ ] Provably Fair for all applicable games; Reaction Tap excluded.
-- [ ] Game admin configuration/monitoring is the actual runtime source where configured.
-- [ ] Colour Prediction client lobby/game-state dependency must be reduced to non-authoritative UI state.
-- [ ] Local Spin Battle settlement/idempotency helpers cannot determine financial settlement.
-- [ ] JSON/text player-list and join state must be concurrency-safe and durable.
+- [ ] Spin Battle stake-proportional winner probability and matching wheel.
+- [ ] Provably Fair verification for applicable games; Reaction Tap excluded.
+- [ ] No client-side financial settlement authority.
+- [ ] Durable/restart-safe matchmaking and round state.
 
 # Phase 3 — Football AI [ ]
-- [ ] Provider sync, freshness, AI analysis, generation and persistence.
-- [ ] Free exactly 2 games/day; unified VIP gating.
-- [ ] Prepare tomorrow without early exposure; automatic midnight publication and next-day preparation.
-- [ ] Automatic Football Hub points with idempotency.
-- [ ] Worker/retry/timezone reliability.
-- [ ] Admin monitors/configures/diagnoses the automated pipeline; reconcile manual prediction permissions.
-- [ ] VIP access must be derived from authenticated backend identity; client/query `isVip` assertions cannot authorize access.
-- [ ] Provider failure/stale fixture behavior must fail closed rather than create silently valid predictions.
+- [ ] Backend-authoritative VIP entitlement; client/query `isVip` cannot grant access.
+- [ ] Free-user daily allowance, VIP access and exact UTC/day behavior.
+- [ ] Provider freshness/fail-closed behavior.
+- [ ] Durable prediction generation/publishing/scheduling.
+- [ ] Admin/manual prediction authorization unified with user access rules.
+- [ ] Football Hub points exactly-once.
 
 # Phase 4 — Auction Marketplace [ ]
-- [ ] Admin create/edit/schedule/activate/pause/end.
-- [ ] Inventory/listing, bidding, concurrency and SSE/live updates.
-- [ ] Winner, settlement, claim, failure, expiry and cancellation.
-- [ ] Wallet/ledger integration and public bidder identity.
-- [ ] Durable scheduler/lock across restart and multiple instances.
-- [ ] Bid/outbid/reservation concurrency and exactly-once settlement.
+- [ ] Durable scheduler/locking across restart and multiple instances.
+- [ ] Atomic bid concurrency, bid numbering and leader state.
+- [ ] Reservation/debit/refund lifecycle and exactly-once settlement.
+- [ ] Secure authenticated live/SSE updates.
+- [ ] Claim/expiry/cancel/reward delivery reconciliation.
 
 # Phase 5 — Referral, Affiliate & Ambassador [ ]
-- [ ] Code/link attribution and ambassador attribution.
-- [ ] Registration/session persistence; self-referral and circular-lineage protection.
-- [ ] Task/game commissions, eligibility, idempotency and ledger records.
-- [ ] Referral rewards and correct wallet destinations.
-- [ ] Dashboards/downlines/statistics.
-- [ ] Ambassador application/approval/activity/pool distribution lifecycle.
-- [ ] Full admin investigation/configuration/monitoring.
-- [ ] Prevent duplicate first-VIP referral rewards on renewal/concurrency.
+- [ ] Self-referral and circular-lineage protection.
+- [ ] First-VIP reward exactly-once.
+- [ ] Commission concurrency/idempotency.
+- [ ] Correct wallet destinations.
+- [ ] Ambassador application, approval, activity and distribution lifecycle.
 
 # Phase 6 — Wallet, Ledger & Financial [ ]
-- [ ] One-wallet-per-user spendable model; safely remove legacy `main`.
-- [ ] Task Vault separated conceptually from spendable balances.
-- [ ] Exact monetary representation; remove Float accounting risk.
-- [ ] Atomic debit/credit, concurrency, idempotency and reconciliation.
-- [ ] Real Kora fiat collection replacing generated/manual BZ bank references.
-- [ ] Real Kora payout replacing provider-less withdrawal execution while preserving the current WithdrawalWizard UX.
-- [ ] NGN/KES/ZAR/configured GHS rails only after actual merchant/rail activation.
-- [ ] USD deposit architecture ON HOLD/disabled until Kora confirmation/activation.
-- [ ] GBP deposit unavailable until supported/activated.
-- [ ] USD/GBP withdrawals only through verified supported Kora payout rails.
-- [ ] Provider refs, idempotency, webhook authentication/replay protection and reconciliation.
-- [ ] Exact transaction currency/gross/fee/net/FX/source/base-USD fields and immutable history.
-- [ ] Preserve crypto deposit unique-amount UX; make matching, confirmations, crediting and checkpoint durable/idempotent.
-- [ ] Preserve crypto withdrawal USDT BEP-20 UX; implement actual backend-controlled on-chain payout, durable status/reconciliation, duplicate protection and failure/retry recovery.
-- [ ] Fiat deposit must no longer use generated BZ/manual confirmation as the normal production path.
-- [ ] Fiat withdrawal must preserve bank destination/fee/limit/PIN UX while connecting to Kora.
-- [ ] Frontend/local monitoring cannot finalize deposits or withdrawals.
-- [ ] Transfers and every domain's financial effects are ledger-reconciled.
-- [ ] Transfer request-level idempotency for client retries.
-- [ ] Admin wallet adjustments require least privilege, reason, audit and idempotency.
+- [ ] Exact monetary representation; remove Float from financial accounting.
+- [ ] Real Kora collection and payout integration.
+- [ ] Preserve canonical withdrawal UX.
+- [ ] Durable crypto deposit monitoring.
+- [ ] Actual crypto payout execution.
+- [ ] No generated BZ/manual normal fiat deposit execution.
+- [ ] Frontend cannot finalize financial state.
+- [ ] Transfer idempotency and immutable ledger reconciliation.
 
 # Phase 7 — Profile, Settings, Authentication & Identity [ ]
-- [ ] `/users/me` is sole identity authority.
-- [ ] Remove local identity/profile source-of-truth behavior.
-- [ ] Username/full-name/avatar/public ID synchronization.
-- [ ] Enforce username cooldown consistently across every update path.
-- [ ] Registration, email verification, login, refresh rotation, logout, reset/change password, lockout, suspension/deactivation.
-- [ ] TOTP/2FA and Security PIN.
-- [ ] Preferences, payment details and address security.
-- [ ] Consolidate frontend API transport and remove localhost/empty production fallbacks.
-- [ ] Authenticated transport owns refresh/retry behavior.
-- [ ] Payment-detail changes have controlled security/reverification, masking and audit semantics.
+- [ ] `/users/me` sole identity source.
+- [ ] Username cooldown enforced server-side.
+- [ ] Auth refresh/retry behavior hardened.
+- [ ] Payment-detail security and synchronization.
 
 # Phase 8 — Real Phone Verification [ ]
-- [ ] Replace simulated frontend OTP entirely.
-- [ ] Backend cryptographically secure OTP generation/storage/verification.
-- [ ] Integrate Contiguity managed OTP API.
-- [ ] Sender/name follows actual provider-supported configuration; no assumed carrier approval.
-- [ ] Expiry, attempts, resend cooldown and per-user/phone/IP rate limits.
-- [ ] No OTP returned to frontend, console or authoritative localStorage.
-- [ ] Verified timestamp and controlled re-verification on phone change.
-- [ ] Remove client-controlled `phoneVerified` from profile update.
-- [ ] KYC and withdrawal use backend verification state.
+- [ ] Real Contiguity OTP.
+- [ ] Server-generated OTP, expiry, attempts, resend/rate limits and durable verification state.
+- [ ] Reverify on phone change.
 
 # Phase 9 — Real KYC / Identity Verification [ ]
-- [ ] Server-side phone prerequisite.
-- [ ] Integrate Didit into existing BitZimi KYC UX.
-- [ ] Persist required identity fields without unsupported/ad-hoc requirements.
-- [ ] Validate country/ID type and document ownership.
-- [ ] Private production storage and short-lived signed URLs.
-- [ ] File security, retention, deletion and replacement lifecycle.
-- [ ] Real Didit verification; production mock mode blocked.
-- [ ] Auto-approve/manual-review/reject/resubmission lifecycle.
-- [ ] Atomic KYC/profile/address-lock synchronization.
-- [ ] Notifications and audit trail.
-- [ ] Remove sensitive PII/images from localStorage and unsafe logs.
-- [ ] Secure admin document review; explicit Super Admin-only override where permitted.
-- [ ] Durable KYC processing; no process-local critical verification job.
-- [ ] KYC document keys must be ownership-checked server-side.
+- [ ] Didit authoritative integration.
+- [ ] Ownership checks and durable KYC state.
+- [ ] Private storage, signed access, retention/deletion/replacement.
+- [ ] No sensitive KYC data in localStorage.
 
 # Phase 10 — VIP & Verification-Gated Privileges [ ]
-- [ ] One unified VIP subscription.
-- [ ] Eligibility = active VIP + verified KYC.
-- [ ] No separate direct phone gate; phone remains KYC prerequisite.
-- [ ] Task, Football AI and all other VIP gates use backend identity.
-- [ ] Purchase/renew/expiry/streaks.
-- [ ] Admin grants: 1 week, 2 weeks, 1 month, 3 months, 1 year.
-- [ ] Cancel/reset/monitor/audit.
-- [ ] No client-side VIP authority.
-- [ ] Normalize all `approved`/`verified` contracts.
+- [ ] Unified VIP entitlement.
+- [ ] KYC `verified` prerequisite.
+- [ ] Admin grants with required durations.
+- [ ] Normalize `approved`/`verified` mismatch.
 
 # Phase 11 — Promotions, Monthly Events, Notifications & Rewards [ ]
-- [ ] Promotion lifecycle, scheduling, eligibility, funding and approval.
-- [ ] Featured promotion flow.
-- [ ] Monthly Challenge/Event lifecycle and leaderboards.
-- [ ] Referral/affiliate/ambassador connections.
-- [ ] Exactly-once rewards.
-- [ ] Notification delivery/read/unread/delete/broadcast/retry.
-- [ ] Durable event/outbox/queue semantics for critical notifications and rewards.
+- [ ] Durable reward/notification semantics.
 - [ ] Concurrent challenge distribution cannot double-pay.
-- [ ] Full admin controls and audit.
+- [ ] Promotion lifecycle reconciliation.
 
 # Phase 12 — Entire Admin Panel & Configuration [ ]
-Verify every admin page, route, API and mutation:
-- [ ] Dashboard/Analytics.
-- [ ] Users/User Detail.
-- [ ] KYC.
-- [ ] Deposits/Withdrawals/Transactions/Wallets.
-- [ ] Tasks/Approvals/Proofs.
-- [ ] Games.
-- [ ] Football AI.
-- [ ] VIP.
-- [ ] Referral/Affiliate/Ambassador.
-- [ ] Challenges/Football Points.
-- [ ] Promotions.
-- [ ] Auctions.
-- [ ] Notifications.
-- [ ] Content/Pages/Platform Text.
-- [ ] Security events/login history/sessions/IP controls/fraud/compliance.
-- [ ] Audit Log.
-- [ ] Currency/Languages/Translations.
-- [ ] Feature Management.
-- [ ] Settings/configuration.
-- [ ] AI Developer Center.
-- [ ] Backend permissions are authoritative and frontend child-route permissions align for correct UX.
-- [ ] Generic user editing cannot change privileged roles.
-- [ ] Role changes are Super Admin-only, explicit and audited.
-- [ ] KYC direct overrides are removed or explicit Super Admin-only audited exceptions.
-- [ ] Financial/KYC/security actions use least privilege, privacy/masking and immutable audit records.
-- [ ] Config pages demonstrably change backend runtime behavior.
-- [ ] Analytics reconcile to authoritative transactions/ledger.
-- [ ] No mock/local authority in production admin.
-- [ ] Display currency remains separate from transaction-rail configuration.
-- [ ] AI Developer Center patch lifecycle is authorized, reviewable, auditable, verifiable and rollback-safe.
+- [ ] All admin sections and child-route permissions align.
+- [ ] Role changes are Super Admin-only.
+- [ ] KYC overrides explicit and audited.
+- [ ] Configuration pages affect backend behavior.
+- [ ] Analytics reconcile to ledger.
+- [ ] No mock/local production authority.
 
 # Phase 13 — Content, Translation & Localization [ ]
-- [ ] Inventory every user-facing string.
-- [ ] Full main-platform/admin translation coverage.
-- [ ] Backend-managed catalog.
-- [ ] Remove business-critical hardcoded text bypassing localization.
-- [ ] Synchronize supported languages/currencies without duplicate inconsistent catalogs.
-- [ ] Display currency remains separate from transaction currency/rail.
-- [ ] Correct timezone/date/money formatting.
+- [ ] Content/static pages publish lifecycle.
+- [ ] Translation catalog and approval lifecycle.
+- [ ] Language synchronization.
 
 # Phase 14 — Security, Database, Runtime & Production Infrastructure [ ]
-- [ ] Supabase RLS verification for all relevant tables.
-- [ ] DB constraints/index review and legacy cleanup.
-- [ ] Exact monetary representation migration and constraints.
-- [ ] Durable OTP challenge storage and uniqueness constraints.
-- [ ] Rate limits for auth, OTP, KYC, financial and abuse-sensitive operations.
-- [ ] Upload/PII/logging security and retention controls.
-- [ ] Session, replay, security headers and CORS hardening.
-- [ ] Durable workers, locks, retries and idempotency for critical jobs.
-- [ ] Remove process-local state from business-critical workflows.
-- [ ] Game restart and Render multi-instance recovery.
-- [ ] Verify Vercel, Render, Supabase, storage, SMS, email, payment and football provider integrations/env configuration.
-- [ ] Verify Kora merchant activation separately for every exposed rail.
-- [ ] Unsupported/unconfirmed payment rails remain disabled.
-- [ ] Durable auction, challenge, KYC, notification and crypto-monitor checkpoints.
-- [ ] Security audit of duplicate/legacy frontend trees before deletion.
+- [ ] RLS and database ownership/constraints.
+- [ ] Exact money representation.
+- [ ] Durable OTP, rate limits, upload/PII/logging controls.
+- [ ] Session/replay/CORS/security hardening.
+- [ ] Durable workers, locks and checkpoints; no process-local critical state.
+- [ ] Render multi-instance recovery.
+- [ ] Verify all integrations and Kora rail activation.
+- [ ] Unsupported rails disabled.
+- [ ] Durable auction/challenge/KYC/notification/crypto checkpoints.
+- [ ] Audit duplicate frontend trees.
 
 # Phase 15 — AI Developer Center [ ]
-- [ ] Real repository scans.
-- [ ] Issue classification with evidence.
-- [ ] Patch proposals with explicit admin approval/rejection.
-- [ ] Verification and rollback.
-- [ ] CI/CD integration, scan history and monitoring.
-- [ ] No mock scan output represented as real scan output.
+- [ ] Real project scanning and issue detection.
+- [ ] Auto-fix generation, approval, verification and rollback.
+- [ ] Integrations, CI/CD and monitoring.
 
 # Phase 16 — Dead Code / Duplication / Legacy Cleanup [ ]
-- [ ] Legacy main wallet.
-- [ ] Local identity/profile authority.
-- [ ] Simulated phone OTP.
-- [ ] Sensitive KYC localStorage.
-- [ ] Duplicate API/profile/proof/settlement implementations.
-- [ ] Obsolete static game/lobby configuration.
-- [ ] Obsolete manual Football paths.
-- [ ] Dead admin/game services/routes/components.
-- [ ] Obsolete DB fields/models/indexes.
-- [ ] Stale flags/phase comments.
-- [ ] Duplicate payment/deposit/withdrawal implementations.
-- [ ] Root `app/` versus active `src/app/` duplicate tree only after dependency verification.
+- [ ] Remove legacy wallet and local identity authority.
+- [ ] Remove simulated OTP and local KYC authority.
+- [ ] Remove duplicate/static game/lobby configuration.
+- [ ] Remove obsolete Football paths.
+- [ ] Remove dead admin/game code and obsolete DB fields.
+- [ ] Remove duplicate payment paths.
+- [ ] Remove root `app/` duplicate tree only after dependency verification against active `src/app/`.
 
 # Phase 17 — Automated Testing, E2E & Final Sign-Off [ ]
-- [ ] Backend unit/integration/auth/financial/concurrency/KYC/phone/game/worker tests.
-- [ ] Frontend test framework and CI.
-- [ ] Full E2E: registration → email → login/2FA → independent phone → KYC/Didit → profile → VIP → tasks → games/fairness → Football AI → auction → referrals → deposits/withdrawals → promotions/events/notifications → admin.
-- [ ] Payment E2E for enabled NGN/KES/ZAR/GHS rails, verified USD withdrawal and verified GBP withdrawal; USD deposit remains disabled pending Kora confirmation; GBP deposit unavailable.
-- [ ] Withdrawal phone gate: unverified and already-verified paths.
-- [ ] Deposit/withdrawal provider webhook, replay, retry, restart and reconciliation tests.
-- [ ] Crypto deposit/withdrawal on-chain confirmation and duplicate-protection tests.
-- [ ] Adversarial authorization, concurrency, replay, idempotency and privilege-escalation tests.
-- [ ] Final gate: no unresolved P0; no P1 without accepted risk; canonical rules verified; ledger reconciled; security and production integrations verified; final audit updated.
-- [ ] Final completion order: Phases 1 → 17.
+- [ ] Backend and frontend test coverage.
+- [ ] Full E2E flows.
+- [ ] Payment E2E.
+- [ ] Phone-gate tests.
+- [ ] Provider replay/retry/restart tests.
+- [ ] Crypto tests.
+- [ ] Adversarial auth/concurrency/idempotency tests.
+- [ ] Final P0/P1 gate and production sign-off.
