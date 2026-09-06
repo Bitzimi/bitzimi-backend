@@ -82,7 +82,7 @@ import { ambassadorsRoutes, adminAmbassadorsRoutes } from "./modules/ambassadors
 import { challengesRoutes, adminChallengesRoutes }   from "./modules/challenges/challenges.routes";
 // Phase 21 — Featured Promotion & Platform Announcement System
 import { promotionsRoutes }          from "./modules/promotions/promotions.routes";
-import { adminPromotionsRoutes }     from "./modules/promotions/admin.promotions.routes";
+import { adminPromotionsRoutes }     from "./modules/admin/promotions/admin.promotions.routes";
 import { seedDefaultFeaturedPricing, runScheduledPromotions } from "./modules/promotions/promotions.service";
 // Phase 23.3 — Currency Management
 import { adminCurrencyRoutes }       from "./modules/admin/currency/admin.currency.routes";
@@ -111,16 +111,19 @@ import { startAiAnalysisWorker }         from "./jobs/aiAnalysisWorker";
 import { startFootballSyncWorker }       from "./jobs/footballSyncWorker";
 import { startAutoPublishWorker }        from "./jobs/autoPublishWorker";
 
-// ── Phase 3H: validate production config before accepting any traffic ─────────
 validateProductionConfig();
 
 const app = Fastify({
   logger:    { level: config.env === "production" ? "info" : "warn" },
-  bodyLimit: 1 * 1024 * 1024,  // 3H: 1 MB max payload
+  bodyLimit: 1 * 1024 * 1024,
 });
 
+function authenticatedRateLimitKey(req: any): string {
+  const authorization = String(req.headers.authorization ?? "");
+  return authorization ? `${req.ip}:${authorization}` : `anon:${req.ip}`;
+}
+
 async function bootstrap() {
-  // ── 3H: Hardened security headers ───────────────────────────────────────────
   await app.register(helmet, {
     contentSecurityPolicy: {
       directives: {
@@ -148,50 +151,45 @@ async function bootstrap() {
     methods:     ["GET","POST","PATCH","PUT","DELETE","OPTIONS"],
   });
 
-  // ── 3H: Global ceiling — individual route groups have tighter limits ─────────
+  // Global ceiling is keyed by authenticated token so multiple users behind the
+  // same mobile/Wi-Fi NAT do not consume one another's request bucket.
   await app.register(rateLimit, {
     global:      true,
     max:         200,
     timeWindow:  "1 minute",
-    keyGenerator: (req) => `${req.ip}:${(req.headers.authorization ?? "anon").slice(0, 20)}`,
+    keyGenerator: authenticatedRateLimitKey,
     errorResponseBuilder: () => ({ error: { code: "RATE_LIMITED", message: "Too many requests — please slow down" } }),
   });
 
   app.get("/health", async () => ({ status: "ok", phase: "3H", env: config.env, timestamp: new Date().toISOString() }));
 
-  // ── 3A — Auth: tightest limit (5/min per IP — brute-force protection) ────────
   app.register(async (scope) => {
     await scope.register(rateLimit, { max: 5, timeWindow: "1 minute", keyGenerator: (r) => r.ip });
     scope.register(authRoutes, { prefix: "/api/v1/auth" });
   });
 
-  // ── 3A — Users / Wallets ──────────────────────────────────────────────────────
   app.register(usersRoutes,   { prefix: "/api/v1/users" });
   app.register(walletsRoutes, { prefix: "/api/v1/wallets" });
 
-  // ── 3B — Financial: 10/min per user ──────────────────────────────────────────
   app.register(async (scope) => {
-    await scope.register(rateLimit, { max: 10, timeWindow: "1 minute" });
+    await scope.register(rateLimit, { max: 10, timeWindow: "1 minute", keyGenerator: authenticatedRateLimitKey });
     scope.register(transactionsRoutes, { prefix: "/api/v1/transactions" });
     scope.register(depositsRoutes,     { prefix: "/api/v1/deposits" });
     scope.register(withdrawalsRoutes,  { prefix: "/api/v1/withdrawals" });
   });
 
-  // ── 3C — KYC ──────────────────────────────────────────────────────────────────
   app.register(kycRoutes, { prefix: "/api/v1/kyc" });
-
-  // ── 3D — Tasks / Proofs ───────────────────────────────────────────────────────
   app.register(tasksRoutes,  { prefix: "/api/v1/tasks" });
   app.register(proofsRoutes, { prefix: "/api/v1/tasks" });
-
-  // ── 3E — VIP / Referrals / Affiliates ────────────────────────────────────────
   app.register(vipRoutes,        { prefix: "/api/v1/vip" });
   app.register(referralsRoutes,  { prefix: "/api/v1/referrals" });
   app.register(affiliatesRoutes, { prefix: "/api/v1/affiliates" });
 
-  // ── 3F — Games: 30/min per user (frequent polling during rounds) ──────────────
+  // Games need frequent polling. Use a higher per-user ceiling and the same
+  // authenticated key as the global limiter; the old default-IP bucket caused
+  // two legitimate players on the same network to rate-limit one another.
   app.register(async (scope) => {
-    await scope.register(rateLimit, { max: 30, timeWindow: "1 minute" });
+    await scope.register(rateLimit, { max: 120, timeWindow: "1 minute", keyGenerator: authenticatedRateLimitKey });
     scope.register(gamesSharedRoutes, { prefix: "/api/v1/games" });
     scope.register(colorGameRoutes,   { prefix: "/api/v1/games/color" });
     scope.register(spinBattleRoutes,  { prefix: "/api/v1/games/spin" });
@@ -202,37 +200,19 @@ async function bootstrap() {
     scope.register(provablyFairRoutes, { prefix: "/api/v1/games/fairness" });
   });
 
-  // ── 3G — Notifications ────────────────────────────────────────────────────────
   app.register(notificationsRoutes, { prefix: "/api/v1/notifications" });
-
-  // ── Phase 16 — Football AI Hub (authenticated users) ─────────────────────────
   app.register(footballRoutes, { prefix: "/api/v1/football" });
-
-  // ── Phase 20 — Ambassador Program (authenticated users) ──────────────────────
   app.register(ambassadorsRoutes, { prefix: "/api/v1/ambassadors" });
-
-  // ── Phase 20 — Monthly Referral Challenge (authenticated users) ───────────────
   app.register(challengesRoutes, { prefix: "/api/v1/challenges" });
-
-  // ── Phase 21 — Featured Promotions & Announcements (authenticated users) ──────
   app.register(promotionsRoutes, { prefix: "/api/v1/promotions" });
-
-  // ── Phase 22 — Auction Marketplace (authenticated users) ─────────────────────
   app.register(auctionsRoutes, { prefix: "/api/v1/auctions" });
-
-  // ── Platform config (authenticated users) ────────────────────────────────────
   app.register(platformRoutes, { prefix: "/api/v1/platform" });
-
-  // ── Public stats (no auth required — landing page) ───────────────────────────
   app.register(publicRoutes, { prefix: "/api/v1/public" });
 
-  // ── Phase 1: maintenance mode hook (global — runs before every route) ─────────
-  // Admin users (role != "user") always bypass. Certain paths always allowed.
   app.addHook("onRequest", maintenanceModeHook);
 
-  // ── 3G — Admin: 60/min per user ───────────────────────────────────────────────
   app.register(async (scope) => {
-    await scope.register(rateLimit, { max: 60, timeWindow: "1 minute" });
+    await scope.register(rateLimit, { max: 60, timeWindow: "1 minute", keyGenerator: authenticatedRateLimitKey });
     scope.register(adminKycRoutes,      { prefix: "/api/v1/admin/kyc" });
     scope.register(adminTasksRoutes,    { prefix: "/api/v1/admin/tasks" });
     scope.register(adminProofsRoutes,   { prefix: "/api/v1/admin/proofs" });
@@ -241,96 +221,55 @@ async function bootstrap() {
     scope.register(adminDepositsRoutes,     { prefix: "/api/v1/admin/deposits" });
     scope.register(adminWithdrawalsRoutes,  { prefix: "/api/v1/admin/withdrawals" });
     scope.register(adminTransactionsRoutes, { prefix: "/api/v1/admin/transactions" });
-    // Phase 1 — system configuration API
     scope.register(adminConfigRoutes,   { prefix: "/api/v1/admin/config" });
-    // Phase 5 — game management API
     scope.register(adminGamesRoutes,    { prefix: "/api/v1/admin/games" });
-    // Phase 7 — referrals & affiliates admin
     scope.register(adminReferralsRoutes,  { prefix: "/api/v1/admin/referrals" });
     scope.register(adminAffiliatesRoutes, { prefix: "/api/v1/admin/affiliates" });
-    // Phase 8 — VIP admin
     scope.register(adminVipRoutes,        { prefix: "/api/v1/admin/vip" });
-    // Phase 9 — Notifications, Content, Static Pages, Platform Text
     scope.register(adminNotificationsRoutes, { prefix: "/api/v1/admin/notifications" });
     scope.register(adminContentRoutes,       { prefix: "/api/v1/admin/content" });
     scope.register(adminPagesRoutes,         { prefix: "/api/v1/admin/pages" });
     scope.register(adminTextRoutes,          { prefix: "/api/v1/admin/text" });
-    // Phase 10 — Analytics & Reports
     scope.register(adminAnalyticsRoutes,     { prefix: "/api/v1/admin/analytics" });
-    // Phase 14 — AI Developer Center: Real Project Scanning
     scope.register(adminDeveloperRoutes,     { prefix: "/api/v1/admin/developer" });
-    // Phase 15 — Security & Audit
     scope.register(adminSecurityRoutes,      { prefix: "/api/v1/admin/security" });
-    // Phase 16 — Football AI Hub Admin
     scope.register(adminFootballRoutes,      { prefix: "/api/v1/admin/football" });
-    // Phase 17.1 — AI Intelligence Foundation
     scope.register(adminAiRoutes,            { prefix: "/api/v1/admin/ai" });
-    // Phase 20 — Ambassador Program Admin
     scope.register(adminAmbassadorsRoutes,   { prefix: "/api/v1/admin/ambassadors" });
-    // Phase 20 — Monthly Challenge Admin
     scope.register(adminChallengesRoutes,    { prefix: "/api/v1/admin/challenges" });
-    // Phase 21 — Featured Promotion Admin
     scope.register(adminPromotionsRoutes,    { prefix: "/api/v1/admin/promotions" });
-    // Phase 22 — Auction Marketplace Admin
     scope.register(adminAuctionsRoutes,      { prefix: "/api/v1/admin/auctions" });
-    // Phase 28 — Admin Wallet Management
     scope.register(adminWalletsRoutes,       { prefix: "/api/v1/admin/wallets" });
-    // Phase 23.3 — Currency Management Admin
     scope.register(adminCurrencyRoutes,      { prefix: "/api/v1/admin/currency" });
-    // Phase 24.2 — Language & Translation Management Admin
     scope.register(adminLanguageRoutes,      { prefix: "/api/v1/admin/language" });
     scope.register(adminTranslationRoutes,   { prefix: "/api/v1/admin/translation" });
-    // Phase 24.2 — Feature Management Admin
     scope.register(adminFeaturesRoutes,      { prefix: "/api/v1/admin/features" });
   });
 
-  // ── Phase 24.2 — Public globalisation endpoints (no auth required) ───────────
-  app.get("/api/v1/languages", async (_req, reply) => {
-    return reply.send({ data: await listEnabledLanguages() });
-  });
+  app.get("/api/v1/languages", async (_req, reply) => reply.send({ data: await listEnabledLanguages() }));
   app.get("/api/v1/translations/:code", async (req, reply) => {
     const { code } = req.params as { code: string };
-    const bundle = await getTranslationsForLanguage(code);
-    return reply.send({ data: bundle });
+    return reply.send({ data: await getTranslationsForLanguage(code) });
   });
-  app.get("/api/v1/platform/branding", async (_req, reply) => {
-    return reply.send({ data: await getBranding() });
-  });
-
-  // Public currency endpoints (no auth required — used by SettingsContext)
-  // /default MUST be registered before the bare /currencies route so Fastify
-  // does not match "default" as a dynamic segment of the parent route.
-  app.get("/api/v1/currencies/default", async (_req, reply) => {
-    return reply.send({ data: await getDefaultCurrency() });
-  });
-  app.get("/api/v1/currencies", async (_req, reply) => {
-    return reply.send({ data: await listEnabledCurrencies() });
-  });
+  app.get("/api/v1/platform/branding", async (_req, reply) => reply.send({ data: await getBranding() }));
+  app.get("/api/v1/currencies/default", async (_req, reply) => reply.send({ data: await getDefaultCurrency() }));
+  app.get("/api/v1/currencies", async (_req, reply) => reply.send({ data: await listEnabledCurrencies() }));
 
   app.setErrorHandler(errorHandler);
-  app.setNotFoundHandler((req, reply) =>
-    reply.status(404).send({ error: { code: "NOT_FOUND", message: `${req.method} ${req.url} not found` } })
-  );
+  app.setNotFoundHandler((req, reply) => reply.status(404).send({ error: { code: "NOT_FOUND", message: `${req.method} ${req.url} not found` } }));
 
-  // ── Phase 1: seed default platform configuration (idempotent, never overwrites) ─
   await seedDefaultConfig();
-  // ── Phase 23.3: seed default currencies (idempotent — skips if table is populated) ─
   await seedDefaultCurrencies();
   await seedDefaultRooms();
-  // ── Phase 21: seed featured placement pricing (idempotent — skips existing rows) ─
   await seedDefaultFeaturedPricing();
-  // ── Phase 9: seed text defaults and static pages ─────────────────────────────
   await seedDefaultText();
   await seedDefaultPages();
-  // ── Phase 24.2: seed languages and translation keys ──────────────────────────
   await seedDefaultLanguages();
   await seedDefaultTranslationKeys();
 
-  // ── system.debug_mode: elevate log level when enabled in SystemConfig ────────
   const debugMode = await getConfigValue<boolean>("system.debug_mode", false);
   if (debugMode) app.log.level = "debug";
 
-  // ── Background jobs ──────────────────────────────────────────────────────────
   startWithdrawalLimitResetJob();
   startScreenshotRetentionJob();
   startAuditLogRetentionJob();
@@ -338,30 +277,26 @@ async function bootstrap() {
   await startColorGameLobbies();
   await startSpinBattleLobbies();
   startQueueCleanup();
-  setInterval(() => cleanupExpiredRooms(), 60_000); // clean up expired private rooms
+  setInterval(() => cleanupExpiredRooms(), 60_000);
   startCryptoDepositMonitor();
   startCommissionJobWorker();
   startAiAnalysisWorker();
   startFootballSyncWorker();
   startAutoPublishWorker();
-  // Phase 21 — promotion scheduler: auto-activate/expire scheduled promotions
   setInterval(() => { runScheduledPromotions().catch(() => {}); }, 60_000);
-  // Phase 22 — auction scheduler: auto-launch upcoming + auto-end expired auctions
   setInterval(() => { runAuctionScheduler().catch(() => {}); }, 30_000);
 
   await app.listen({ port: config.port, host: config.host });
   console.log(`Bitzimi backend (Phase 3H) — ${config.host}:${config.port}`);
 
-  // ── Graceful shutdown (Phase 3H) ─────────────────────────────────────────────
   const shutdown = async (signal: string) => {
     console.log(`[Shutdown] ${signal} received — closing server gracefully`);
     await app.close();
     console.log("[Shutdown] Server closed. Exiting.");
     process.exit(0);
   };
-
-  process.on("SIGTERM", () => shutdown("SIGTERM")); // Docker / K8s stop signal
-  process.on("SIGINT",  () => shutdown("SIGINT"));  // Ctrl+C in development
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT",  () => shutdown("SIGINT"));
 }
 
 bootstrap().catch(err => { console.error("Startup failed:", err); process.exit(1); });
