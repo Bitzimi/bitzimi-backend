@@ -125,16 +125,23 @@ This is the existing master roadmap. No second roadmap has been created.
 - [✓] **Additional requirement discovered during implementation:** task reference/proof uploads are server-validated; client-supplied existing storage paths are rejected for task reference screenshots and proof uploads are restricted to supported image MIME types.
 - [✓] **Additional requirement discovered during implementation:** rejecting an edited task with previously completed proofs refunds only the remaining Task Vault escrow, preventing an over-refund of already-paid rewards.
 
-# Phase 2 — Games Center [ ]
-- [ ] Backend-authoritative rounds, stakes, timers, locks, results and settlement.
-- [ ] Remove localStorage game authority; harden concurrency, max players, timeouts and restart recovery.
-- [ ] Complete Colour Prediction, Coin Flip, Dice Clash, Dice Royale, Dice Arena, Spin Battle and Reaction Tap.
-- [ ] Dice Royale highest-number rule.
-- [ ] Dice Arena top-two/60-40 rule.
-- [ ] Spin Battle stake-proportional winner probability and matching wheel.
-- [ ] Provably Fair verification for applicable games; Reaction Tap excluded.
-- [ ] No client-side financial settlement authority.
-- [ ] Durable/restart-safe matchmaking and round state.
+# Phase 2 — Games Center [✓]
+- [✓] Backend-authoritative rounds, stakes, timers, locks, results and settlement.
+- [✓] Remove localStorage game authority; harden concurrency, max players, timeouts and restart recovery.
+- [✓] Complete Colour Prediction, Coin Flip, Dice Clash, Dice Royale, Dice Arena, Spin Battle and Reaction Tap.
+- [✓] Dice Clash highest-number rule: the higher roll wins; equal rolls use the deterministic tie-break path.
+- [✓] Dice Royale highest-number rule.
+- [✓] Dice Arena top-two/60-40 rule.
+- [✓] Spin Battle stake-proportional winner probability and matching server-side wheel probability model.
+- [✓] Provably Fair verification for applicable games; Reaction Tap excluded.
+- [✓] No client-side financial settlement authority.
+- [✓] Durable/restart-safe matchmaking and round state.
+- [✓] **Additional requirement discovered during implementation:** added durable DB uniqueness/settlement guards for game bets, active dice rounds and matchmaking queue entries, plus a database trigger that merges concurrent Dice Royale/Arena player lists and rejects over-capacity joins atomically.
+- [✓] **Additional requirement discovered during implementation:** immediate 1v1 match funding now occurs in one transaction with match creation; a durable recovery loop retries unresolved Dice Clash/Coin Flip settlements after restart.
+- [✓] **Additional requirement discovered during implementation:** Reaction Tap signal/timeout processing is database-state driven rather than dependent on a single process-local timeout callback.
+- [✓] **Additional requirement discovered during implementation:** private-room join/start/rematch transitions use row locking and a `starting` claim state so concurrent start requests cannot create duplicate funded matches.
+- [✓] **Additional requirement discovered during implementation:** Spin Battle settlement now persists the exact player/stake inputs used for the weighted Provably Fair calculation so the result can be independently verified.
+- [✓] **Additional requirement discovered during implementation:** the Phase 1 admin proof service syntax regression found during the Phase 2 audit was corrected and the production build re-verified.
 
 # Phase 3 — Football AI [ ]
 - [ ] Backend-authoritative VIP entitlement; client/query `isVip` cannot grant access.
