@@ -5,9 +5,7 @@ import { getConfigValue } from "../../admin/config/admin.config.service";
 import { activateReferral } from "../../referrals/referrals.service";
 
 const ROOM_TTL_MS = 24 * 60 * 60 * 1000;
-const STARTING_RECOVERY_MS = 2 * 60 * 1000;
 const CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-
 function generateCode() { let code = ""; for (let i = 0; i < 6; i++) code += CHARS[randomInt(CHARS.length)]; return code; }
 async function generateUniqueCode() { for (let i = 0; i < 20; i++) { const code = generateCode(); if (!(await db.privateRoom.findUnique({ where: { code } }))) return code; } throw Object.assign(new Error("Failed to generate unique room code"), { statusCode: 500, code: "CODE_COLLISION" }); }
 async function withProfiles(room: any) { return db.privateRoom.findUnique({ where: { id: room.id }, include: { host: { include: { profile: { select: { username: true, avatarUrl: true } } } }, guest: { include: { profile: { select: { username: true, avatarUrl: true } } } } } }); }
@@ -131,5 +129,4 @@ export async function cancelRoom(code: string, userId: string) {
 
 export async function cleanupExpiredRooms() {
   await db.privateRoom.updateMany({ where: { status: { in: ["waiting", "ready", "rematch"] }, expiresAt: { lt: new Date() } }, data: { status: "cancelled" } }).catch(() => {});
-  await db.privateRoom.updateMany({ where: { status: "starting", updatedAt: { lt: new Date(Date.now() - STARTING_RECOVERY_MS) } }, data: { status: "ready" } }).catch(() => {});
 }
