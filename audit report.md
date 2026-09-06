@@ -1,1139 +1,367 @@
-# BitZimi — Full-Platform Re-Audit Report
+# BitZimi — Full-Platform Audit Report
 
-**Audit date:** 2026-09-05  
+**Audit date:** 2026-09-06  
 **Repositories audited:** `Bitzimi/bitzimi-frontend` + `Bitzimi/bitzimi-backend`  
 **Branch:** `main`  
-**Audit type:** Full main-platform + full Admin Panel re-audit, previous-report reconciliation, security and production-readiness audit
+**Audit type:** Full codebase/source-tree audit, flow audit, frontend/backend reconciliation, security/integrity audit, and roadmap reconciliation baseline.
 
-> This report supersedes the previous audit report. The audit was deliberately expanded beyond the features previously discussed. Every major user-facing domain and every major Admin Panel domain is included. A route/page/module existing in code is not treated as proof that its business lifecycle is complete or production-ready.
+> This is an update of the existing audit report. No separate audit file was created. Findings below are based on the repositories themselves; implementation existence is not treated as proof of production completeness.
 
----
+## 1. Audit scope
 
-# 1. Scope
+The audit covered the complete repository source trees and the implemented flows for:
 
-## Main platform
-
-The audit covers the complete user platform, including:
-
-- landing/public application shell;
-- registration and referral/affiliate/ambassador attribution;
-- login, email verification, password reset/change, refresh, logout and account deactivation;
-- identity/profile, public user identity, username, full name and avatar;
+- public/landing shell and application navigation;
+- registration, referral/affiliate/ambassador attribution, login, email verification, refresh, logout, password reset/change, account suspension/deactivation;
+- profile, public identity, username, full name, avatar and identity synchronization;
 - phone number and phone verification;
-- KYC/identity verification, identity documents, selfie, proof of address and verification status lifecycle;
-- 2FA/TOTP, Security PIN, session/device state and account security;
-- settings, language, currency, theme and payment details;
-- Task Marketplace, Task Creator, My Task/Task Manager, Task Wallet, Task Vault and proof verification;
-- Colour Prediction, PvP Coin Flip, Dice Duel/Dice Clash, Dice Royale, Dice Arena, Spin Battle and Reaction Tap;
-- matchmaking, private rooms, lobbies, round lifecycle, locking, settlement, fees and Provably Fair;
-- Football AI Prediction, provider ingestion, AI analysis, publication, daily quotas and midnight rollover;
-- Auction Marketplace, bids, settlement and claims;
-- Referral, Affiliate and Ambassador systems;
-- unified VIP membership, eligibility, benefits, streaks and grants;
-- Wallet, deposits, withdrawals, transfers, transaction history, ledger and reconciliation;
-- Promotions, announcements, Monthly Challenges/Events and rewards;
+- KYC/identity verification, documents, selfie, proof of address, review/rejection/resubmission and document storage;
+- 2FA/TOTP, Security PIN, sessions and security controls;
+- Settings: language, display currency, theme, password, PIN, bank details, USDT wallet details and address/security settings;
+- Task Marketplace, task creation/editing, approval, pause/resume/stop, My Task, completion, proof, AI/manual verification, reward tiers, Task Wallet and Task Vault;
+- Colour Prediction, Coin Flip, Dice Clash, Dice Royale, Dice Arena, Spin Battle, Reaction Tap, matchmaking, private rooms, lobbies, rounds, locking, settlement, fees and Provably Fair;
+- Football AI Prediction, football provider ingestion, AI analysis/generation/publication, quotas, rollover, Football Hub points and Admin Football/AI;
+- Auction Marketplace, inventory/listing, bids, live updates, winner, settlement, claim, expiry/cancel flows and Admin Auctions;
+- Referral, Affiliate and Ambassador applications, attribution, commissions, downlines, activity and rewards;
+- VIP purchase, renewal, expiry, streaks, eligibility and administrative controls;
+- Wallet balances, ledger, deposits, withdrawals, transfers, transaction history, fiat/crypto flows and reconciliation;
+- Promotions, featured promotions, Monthly Challenges/Events, leaderboards and rewards;
 - Notifications;
-- translation, localization, currency, branding, platform text and content;
-- all additional user-facing services/pages/components present in the repositories;
-- deployment/runtime resilience, background workers and production configuration.
+- language/translation/currency/branding/content;
+- the entire Admin Panel, including Users, KYC, Financial, Tasks, Games, Football/AI, VIP, Referral/Affiliate/Ambassador, Challenges, Promotions, Auctions, Notifications, Content/Pages/Text, Security/Audit, Currency/Languages/Translations, Branding, Features, Settings, Analytics and AI Developer Center;
+- database schema/migrations, middleware, workers, runtime state, deployment configuration, security checks and tests;
+- duplicate/legacy implementations and frontend/backend source-of-truth conflicts.
 
-## Entire Admin Panel
+## 2. Repository baseline
 
-The audit covers:
+- Backend audited HEAD: `d62f83d2c17c3345bea15e7e36235bd7c9fb79d8`.
+- Frontend audited HEAD: `c8aeb088edcc320ebeb9081871e9578a34433d21`.
+- Backend recursive source tree was inspected and is not truncated at GitHub tree level.
+- Frontend recursive source tree was inspected; it contains both `app/` and `src/app/` implementations. `src/main.tsx` imports `./app/App`, making `src/app/` the active application tree while the root `app/` tree remains a dependency-cleanup candidate until all references are proven dead.
 
-- Admin authentication and route protection;
-- roles and permissions;
-- Dashboard and Analytics;
-- Users and User Detail;
-- KYC and identity-sensitive operations;
-- Financial, Deposits, Withdrawals, Transactions and Wallet Management;
-- Task Dashboard, Pending Tasks, Marketplace, Task Detail and Proof Review;
-- Games management/configuration;
-- VIP;
-- Referral, Affiliate and Ambassador administration;
-- Promotions and Monthly Challenges;
-- Auctions;
-- Football AI, Football data and AI Intelligence administration;
-- Notifications;
-- Content, Static Pages and Platform Text;
-- Security, Audit Log, Security Events, Login History, Sessions, IP Controls, Fraud Alerts and Compliance;
-- Admin Settings;
-- Currency, Languages, Translations, Branding and Features;
-- AI Developer Center;
-- all other admin routes/services/configuration found in the repositories.
+## 3. Critical confirmed findings
 
----
+### P0-01 — Phone verification is simulated/client-authoritative
 
-# 2. Repository baseline and previous-report reconciliation
+Frontend `app/services/phoneVerificationService.ts` generates OTPs locally with `Math.random()`, stores them in localStorage, logs them to the console, returns the OTP from the send function and verifies locally. Backend `PATCH /api/v1/users/me/phone` accepts a client-supplied `phoneVerified` value.
 
-## Current repositories
+**Impact:** phone verification is not a trustworthy security event and cannot safely gate KYC, VIP, task creation or withdrawals.
 
-- Backend current `main` tree/HEAD observed: `922b4586091af845e3973159824b8608c8fa03cb`.
-- Frontend current `main` HEAD observed: `c8aeb088edcc320ebeb9081871e9578a34433d21`.
+### P0-02 — KYC/VIP status contract mismatch
 
-The previous report referenced an older backend HEAD. That baseline is corrected here.
+KYC uses `verified` as the successful state while VIP eligibility checks `approved`.
 
-## Important correction
+### P0-03 — VIP does not enforce the canonical verification dependency
 
-The previous audit was too concentrated on task/game/wallet/referral areas. The present report explicitly elevates **identity, phone verification, KYC, document storage, verification pipeline, profile security, account lifecycle, admin privilege boundaries, and all Admin Panel surfaces** to first-class audit domains.
+VIP purchase checks KYC but does not correctly enforce the complete canonical phone/KYC dependency. Task creation likewise relies on active VIP rather than independently validating the complete eligibility contract.
 
-## Admin navigation correction
+### P0-04 — KYC verification contains simulated/fallback authority
 
-The previous audit understated the Admin Panel navigation. The current frontend already has broad routes for Users, KYC, Financial, Tasks, Games, VIP, Referrals, Ambassadors, Challenges, Promotions, Auctions, Football/AI, Security/Audit, Notifications, Content, Pages, Text, Analytics, Currency, Languages, Translations, Branding, Features, Settings and AI Developer Center.
+Frontend document verification simulates face/OCR/address checks. Backend provider modes include incomplete/stub/fallback behavior and mock approval paths. Production KYC must fail closed and use Didit as the authoritative external verification layer.
 
-The primary Admin problem is therefore **not absence of navigation**. It is authorization precision, backend wiring, lifecycle completeness, auditability and production proof.
+### P0-05 — Production KYC storage is incomplete
 
----
+Local filesystem storage is available/default and S3/presigned-url functionality is incomplete/stubbed. Sensitive identity documents do not yet have a complete private production lifecycle.
 
-# 3. Critical P0 findings
+### P0-06 — Sensitive KYC information is stored in browser localStorage
 
-## P0-01 — Phone verification is simulated and client-authoritative
+Identity verification progress contains PII and image data URLs. This must not be an authoritative or persistent sensitive-data store.
 
-**CONFIRMED.**
+### P0-07 — Admin privilege escalation through generic user editing
 
-Frontend `app/services/phoneVerificationService.ts`:
+The generic admin user edit contract accepts a role and writes it under ordinary user-edit permission. Privileged role changes need explicit Super Admin-only authorization.
 
-- generates a 6-digit OTP with `Math.random()`;
-- stores the OTP in localStorage;
-- logs the OTP to the browser console;
-- returns the OTP from `sendVerificationCode()`;
-- verifies the OTP entirely in the browser.
+### P0-08 — Generic Admin KYC status mutation bypasses controlled review
 
-Backend `PATCH /api/v1/users/me/phone` accepts a client-supplied `phoneVerified` boolean and writes it directly to the profile.
+The admin verification endpoint can directly set KYC status values. This must not allow ordinary admins to bypass the controlled KYC lifecycle; any permitted override must be explicit, Super Admin-only and audited.
 
-This means phone verification is not a trustworthy server-side verification event.
+### P0-09 — Monetary database fields use Float
 
-**Impact:** phone verification cannot safely gate KYC, VIP, task creation or other privileged features.
+Wallet, transaction, deposit, withdrawal, task, subscription and related monetary fields use floating-point representation. Exact accounting representation is required.
 
-## P0-02 — VIP KYC contract is inconsistent: `verified` vs `approved`
+### P0-10 — Frontend authentication/identity uses browser authority
 
-**CONFIRMED.**
+Protected-route checks and `IdentityContext` use localStorage-backed identity. Backend `/users/me` must become the sole identity authority.
 
-KYC successful state is represented as `verified`. The VIP subscription service checks for `kyc.status === "approved"`.
+### P0-11 — Browser-local game/financial state remains present
 
-This can block a properly KYC-verified user from purchasing VIP.
+Bets, rounds, settlement state, wallet compatibility data and game history are stored/restored locally in multiple services/contexts. These values may only be non-authoritative UI cache.
 
-## P0-03 — VIP purchase does not enforce phone verification
+### P0-12 — Spin Battle weighting is not proven stake-proportional
 
-**CONFIRMED.**
+The required stake-proportional winner probability is not guaranteed by the inspected winner derivation and must be corrected and independently verified.
 
-VIP subscription checks KYC but does not independently require `userProfile.phoneVerified === true`, despite the canonical rule that normal VIP eligibility requires both phone verification and KYC.
+## 4. Newly confirmed findings from the expanded full-flow audit
 
-## P0-04 — KYC verification contains simulated/fallback verification paths
+### NF-01 — Duplicate frontend application trees
 
-**CONFIRMED.**
+The frontend contains both root `app/` and `src/app/` implementations. `src/main.tsx` imports `src/app/App`, so the repository has duplicate/legacy application code requiring dependency analysis before cleanup.
 
-Frontend `documentVerificationService.ts` simulates face detection, face comparison and OCR/address matching. Backend KYC `aws` mode is a stub that falls back to manual review. Mock mode can automatically approve using fabricated confidence values and must never be a production verification path.
+### NF-02 — Duplicate game state/authority exists across both trees
 
-## P0-05 — KYC production storage/provider path is incomplete
+Both trees contain game services/components, including bet/local-state implementations. This increases the risk that a fix in the active tree does not remove a conflicting legacy path.
 
-**CONFIRMED.**
+### NF-03 — Colour Prediction has an active client-side lobby/game-state dependency
 
-Backend KYC storage defaults to local filesystem. S3 upload and presigned URL functions are stubs. Sensitive identity documents therefore do not yet have a complete production-grade private storage lifecycle in the repository.
+The frontend Colour Prediction implementation imports the local lobby/game-state service while backend Colour Prediction also provides server-side game behavior. This must be reconciled so round/result/settlement authority is singularly backend-owned.
 
-## P0-06 — KYC data and images are persisted in browser localStorage
+### NF-04 — Frontend Spin Battle settlement helper describes localStorage as idempotency storage
 
-**CONFIRMED.**
+`app/utils/spinBattleSettlement.ts` explicitly stores settled results locally. This is not acceptable as financial idempotency authority; server/database idempotency must own settlement.
 
-`IdentityVerification.tsx` stores full name, DOB, ID number, address and image data URLs in `identityVerificationProgress`. It also stores submission metadata locally.
+### NF-05 — Security/PIN state contains process-local behavior
 
-Government ID/selfie data should not be kept in localStorage as an identity source or long-lived sensitive cache.
+Security/PIN and authentication helper state includes browser/process-local state. Rate limiting, lockout, one-time tokens and security events must be durable where they protect financial/security operations.
 
-## P0-07 — Admin role escalation is possible through generic user edit semantics
+### NF-06 — Internal transfer has atomic balance movement but requires request idempotency
 
-**CONFIRMED.**
+The transfer path has atomic debit/credit behavior, but a client retry can still require an explicit request-level idempotency contract so the same intended transfer cannot be applied twice.
 
-`PATCH /api/v1/admin/users/:userId` is protected by `admin.users.edit`, but its body accepts `role`, and `adminEditUser()` writes the role directly. There is no dedicated Super Admin-only role-management permission in the inspected role catalog.
+### NF-07 — Crypto deposit monitoring uses process-local cursor state
 
-A lower-privileged admin with user-edit access must not be able to promote a user to another admin role or Super Admin.
+The BSC monitor has a processed-block cursor in runtime state. Restart/multi-instance operation requires durable cursor/checkpoint and replay-safe event processing.
 
-## P0-08 — Admin KYC status can be directly mutated through a generic verification endpoint
+### NF-08 — Auction scheduling/live state needs durable coordination
 
-**CONFIRMED.**
+Auction scheduling/live processing and SSE connection state include process-local behavior. Restart and multi-instance execution must not duplicate close/settlement or lose state.
 
-`PATCH /api/v1/admin/users/:userId/verification` accepts `unverified`, `pending`, `verified`, or `rejected` under `admin.kyc.approve`. This bypasses the controlled KYC review model and is not separated as a Super Admin-only override.
+### NF-09 — Monthly Challenge distribution needs explicit concurrent exactly-once protection
 
-## P0-09 — Monetary model uses binary floating-point `Float`
+The challenge distribution lifecycle must prevent two simultaneous executions from distributing the same reward more than once. Application-level checks are not sufficient without durable idempotency/constraints.
 
-**CONFIRMED.**
+### NF-10 — Referral/affiliate/ambassador attribution requires explicit self/circular protection
 
-Prisma uses `Float` for wallet balances, transaction amounts/fees, deposits, withdrawals, task budgets/rewards, subscriptions and VIP earnings.
+The registration attribution path resolves lineage, but the full business contract requires durable prevention and tests for self-referral, circular chains and duplicate attribution.
 
-Application rounding to eight decimals does not remove binary floating-point accounting risk.
+### NF-11 — Football public prediction access accepts client-supplied VIP context in at least one inspected path
 
-## P0-10 — Frontend authentication/identity guard relies on localStorage
+VIP authorization must be derived from the authenticated backend identity, not an `isVip` query/client assertion. Public prediction exposure must also follow the exact Free/VIP daily-access rules.
 
-**CONFIRMED.**
+### NF-12 — Football automated pipeline and manual-management permissions need reconciliation
 
-`routes.tsx` uses the presence of `bitzimiUser` in localStorage as the protected-route authentication check. `IdentityContext` likewise derives role, permissions, profile, phone and verification from browser state.
+The repository has automatic workers plus Admin Football/AI management permissions. Manual creation/update capability must not silently undermine the automatic monitor-first business rule.
 
-The backend remains the authorization authority, but the frontend identity boundary is unsafe/stale-prone and can create inconsistent access behavior.
+### NF-13 — Settings currency lists and transaction rails require strict separation
 
-## P0-11 — Browser-local financial/game state remains authoritative in several paths
+Frontend/backend currency catalogs and fallbacks are duplicated. Display currency must not select a payment rail, and rail availability must come from configured provider capability/activation.
 
-**CONFIRMED.**
+### NF-14 — Payment-detail updates need explicit security/reverification semantics
 
-The frontend stores/restores bets, game rounds, settlement state, game stats/history and wallet compatibility data through localStorage. These values cannot be authoritative for money or game outcomes.
+Bank and USDT destination updates exist, but the full lifecycle needs backend authority, masking, auditability, controlled modification and withdrawal binding/reverification where required.
 
-## P0-12 — Spin Battle winner selection does not visibly implement stake-proportional probability
+### NF-15 — Admin child-route permission UX is weaker than backend security
 
-**CONFIRMED from prior/current inspection.**
+The Admin layout/guard provides broad access checks while individual child routes are not uniformly wrapped with their exact required permissions. Backend authorization remains the security boundary, but frontend route-level permission handling needs alignment.
 
-The required `$50/$30/$20 -> 50%/30%/20%` weighting is not guaranteed by the inspected winner derivation.
+### NF-16 — Admin configuration precedence is not uniformly proven
 
----
+Dedicated admin configuration, database values, environment variables and frontend constants coexist. Every setting must have an explicit source-of-truth/precedence rule and must demonstrably affect runtime behavior.
 
-# 4. Identity and authentication audit
+### NF-17 — Analytics and Admin financial views require reconciliation proof
 
-## A-01 — Registration exists and creates core records atomically
+Analytics/admin transaction views exist, but the repository does not provide sufficient automated evidence that dashboard aggregates always reconcile with authoritative ledger/transaction records.
 
-Backend registration creates the user, profile, wallets, KYC record, withdrawal limit and referral record inside a transaction.
+### NF-18 — Authentication transport lacks a fully consolidated refresh/retry boundary
 
-**Remaining risk:** phone verification is not part of a real server-side identity bootstrap, and attribution across referral/affiliate/ambassador programs requires full E2E proof.
+The frontend has multiple API/transport implementations and token consumers. A single authenticated transport should own refresh/retry behavior and prevent inconsistent session handling.
 
-## A-02 — Email verification exists
+### NF-19 — KYC document ownership must be validated server-side
 
-Persistent email-verification tokens and expiry exist.
+Client-provided document/object keys must be checked against the current user's authorized upload records before any verification/review operation.
 
-**P1:** resend abuse/rate limiting, replay, expired-token behavior and post-verification frontend synchronization need E2E proof.
+### NF-20 — KYC processing/notification callbacks include process-local asynchronous work
 
-## A-03 — Login/session lifecycle exists
+Important KYC verification and notification work uses process-local asynchronous callbacks. Critical workflow events need durable queue/outbox semantics.
 
-Password verification, lockout, email-verification enforcement, suspension/deletion checks, refresh tokens and 2FA challenge flow exist.
+## 5. Identity/authentication/profile/settings flow audit
 
-**P1:** full replay, revocation, concurrent refresh and suspended-session behavior need E2E verification.
+### Registration
 
-## A-04 — Refresh token rotation exists
+Registration creates core records transactionally. Referral/affiliate/ambassador attribution and phone verification remain incomplete as authoritative business events.
 
-Refresh tokens are persisted as hashes and revoked during rotation.
+### Email verification
 
-**P1:** token reuse detection and device/session lifecycle need dedicated security tests.
+Persistent tokens/expiry exist. Rate limiting, replay, expiry UX and frontend/backend synchronization require E2E proof.
 
-## A-05 — Password reset is persistent and hashed
+### Login/refresh/logout
 
-Reset tokens are hashed and expired tokens are rejected; existing sessions are revoked after successful password reset.
+Password verification, lockout, email verification, suspension/deletion checks, refresh tokens and 2FA challenge flow exist. Session revocation, concurrent refresh, replay and suspended-session behavior require security tests.
 
-**P1:** full E2E lifecycle remains unproven.
+### Password reset/change
 
-## A-06 — Security PIN exists
+Persistent hashed reset tokens and session revocation after reset exist. Full E2E proof remains required.
 
-PIN hash storage and verification exist.
+### 2FA/TOTP
 
-**P1:** withdrawal one-time-token/replay behavior and every alternate withdrawal path require E2E tests.
+Setup/enable/disable/login challenge exist. Recovery, replay, rate limiting and privileged admin behavior require hardening/tests.
 
-## A-07 — 2FA/TOTP exists
+### Security PIN
 
-Setup, enable, disable and login challenge are implemented.
+PIN hashing/verification and withdrawal one-time-token foundation exist. Brute-force controls, durable rate limits and complete one-time-token replay protection require verification.
 
-**P1:** recovery, replay, rate limiting and privileged admin-disable behavior require hardening/testing.
+### Profile
 
-## A-08 — Account suspension/deactivation exists
+Username/full-name/avatar/profile APIs exist, but local profile authority and duplicate update paths remain. Username cooldown is inconsistent between profile and user update paths. Public identity still exposes internal UUID where a dedicated public identifier is intended.
 
-Backend has suspension/deletion state and login checks.
+### Settings
 
-**P1:** every authenticated business route must consistently reject suspended/deleted accounts, including already-issued sessions.
+Language, display currency, theme, payment details and address flows exist. Backend authority, security of payment-detail updates, catalog consistency and display-currency/transaction-rail separation require final E2E verification.
 
-## A-09 — Frontend auth guard is weaker than backend auth
+## 6. Phone verification flow audit
 
-The route loader checks localStorage rather than server/session validity.
+Current UX can collect a phone number and display verification UI, but actual OTP security is client-side. Production implementation requires:
 
-**P1:** the frontend should bootstrap identity from the backend and treat browser state only as non-authoritative cache.
-
----
-
-# 5. Profile, public identity and settings audit
-
-## P-01 — IdentityContext has multiple sources of truth
-
-Current frontend identity is constructed from:
-
-- `bitzimiUser`;
-- `userProfileService` localStorage;
-- `bitzimiVerification`;
-- `userAvatar`.
-
-Backend `/users/me` already provides the appropriate authoritative profile/verification/VIP/permission data.
-
-**P0/P1:** consolidate identity around the backend.
-
-## P-02 — Username cooldown is bypassable
-
-`profile.service.ts` implements a 30-day username cooldown, but `users.service.ts:updateMe()` also accepts username changes and does not enforce the same cooldown.
-
-**P1:** two profile update paths implement different rules.
-
-## P-03 — Public user ID remains the internal UUID
-
-Backend `getMe()` returns the internal UUID as `id`. A dedicated short public user ID is still required where the product calls for an `(xxxxxxxx)`-style identity.
-
-## P-04 — Avatar/profile synchronization remains duplicated
-
-Backend avatar/profile state and local avatar state can diverge.
-
-## P-05 — Settings have multiple authority boundaries
-
-Language, currency, theme, payment details and address are persisted in backend APIs, while frontend contexts/cache layers also hold state.
-
-**P1:** backend must remain authoritative and all cached values must be invalidated/refreshed predictably.
-
-## P-06 — Payment details require stronger security controls
-
-Bank and USDT details are stored and exposed through authenticated APIs.
-
-**P1:** modification, masking, withdrawal binding, auditability and security re-verification need explicit E2E proof.
-
----
-
-# 6. Phone verification audit
-
-This domain was underrepresented in the previous audit and is now a dedicated blocker.
-
-## Current implementation
-
-Frontend generates and verifies OTP locally. Backend merely stores a boolean.
-
-## Required production properties that are currently missing
-
-- server-side OTP generation using cryptographically secure randomness;
-- durable OTP challenge record;
-- hash-at-rest or equivalent secure challenge storage;
-- expiry;
-- attempt limits;
-- resend cooldown;
-- per-user/per-phone/per-IP rate limits;
+- cryptographically secure server OTP;
+- durable challenge record;
+- secure storage/hash;
+- expiry and invalidation;
+- attempts/resend/rate limits;
 - phone normalization;
-- provider integration for actual SMS delivery;
+- Contiguity managed OTP integration;
+- supported sender configuration only;
 - verification timestamp;
-- invalidation of prior OTPs;
-- server-side proof before setting `phoneVerified`;
-- prevention of changing a verified phone without a controlled re-verification flow;
-- admin audit of privileged phone verification changes.
+- controlled phone-change re-verification;
+- no OTP in browser storage/console/response;
+- server-only `phoneVerified` authority;
+- audit events for privileged changes.
 
-**Status:** P0 — not production-ready.
+## 7. KYC flow audit
 
----
+The existing BitZimi multi-step UX is present and should be preserved. Current gaps are authoritative Didit integration, secure private storage, document ownership, sensitive-data removal from localStorage, durable processing, status normalization, address-lock consistency, review permissions, retention/deletion and production mock blocking.
 
-# 7. KYC / Identity Verification audit
+## 8. VIP flow audit
 
-## K-01 — User KYC UI exists
+Unified VIP exists, but the `verified`/`approved` mismatch, incomplete verification gating and missing administrative custom durations (1w/2w/1m/3m/1y) prevent production completion. Streak claims have guarded update logic but require concurrency/E2E verification.
 
-The frontend provides country, ID type, personal information, document upload, selfie, POA and review stages.
+## 9. Task flow audit
 
-## K-02 — Frontend verification engine is fake
+Task creation, escrow, editing, review, marketplace, My Task, proof and completion are implemented structurally. Required corrections are:
 
-`documentVerificationService.ts` simulates face detection, face matching and OCR/address matching using fabricated/random outcomes.
+- VIP + verified KYC + phone dependency enforced server-side;
+- edited tasks return to admin review;
+- creator cannot manipulate protected status/review state;
+- Task Vault escrow semantics are reconciled with the intended separate escrow concept;
+- reward tiers are authoritative at completion;
+- AI-first/manual fallback processing is durable and exactly-once;
+- proof ownership/privacy is enforced;
+- task document/screenshot storage uses secure production storage.
 
-This service cannot be an authority for KYC.
+## 10. Game flow audit
 
-## K-03 — Frontend stores sensitive KYC material locally
+All seven game areas have implementation in the repositories. Production blockers remain across authority, concurrency, restart recovery, fairness and settlement:
 
-Full form state and image data URLs are persisted in localStorage.
+- Colour Prediction: backend authority, client lobby dependency and fee/accounting reconciliation.
+- Coin Flip: matchmaking/private match/stake/settlement/fairness/concurrency proof.
+- Dice Clash: same plus tie handling.
+- Dice Royale: highest-number rule, six-player cap, countdown, lock, tie behavior and settlement.
+- Dice Arena: third-player countdown, six-player cap, lock, top-two and 60/40 settlement.
+- Spin Battle: stake-proportional selection, matching wheel weights, 12-player cap, lock, fairness and server settlement.
+- Reaction Tap: skill/timing/anti-abuse/settlement testing; Provably Fair remains excluded.
+- Shared matchmaking/private-room/round state must survive restarts and multi-instance operation.
+- All financial game operations require durable idempotency and ledger reconciliation.
 
-## K-04 — Frontend can fall back to local verification context
+## 11. Football AI flow audit
 
-When the KYC API is unavailable, the page calls local `submitVerification()` instead of failing closed.
+Provider adapters, AI analysis, generation, publication, monitoring, Football Hub points and Admin surfaces exist. Remaining gaps include authoritative VIP access, exact 2/day Free quota, midnight publication/next-day preparation, stale/failure handling, durable worker/retry behavior, idempotent points and reconciliation of manual Admin prediction permissions with automatic generation.
 
-**P1/P0:** identity verification must fail closed when the authoritative backend is unavailable.
+## 12. Auction flow audit
 
-## K-05 — ID number is collected but discarded
+User/Admin auction modules, bidding, claims and SSE exist. Remaining gaps are durable scheduling, bid concurrency, reserved-fund safety, outbid/release idempotency, winner settlement, claim/expiry/cancel behavior, public bidder identity and ledger reconciliation.
 
-The frontend collects `idNumber`, but the KYC schema/model does not store it and the submit payload does not send it.
+## 13. Referral/Affiliate/Ambassador flow audit
 
-## K-06 — KYC backend accepts document keys from the client
+Registration attribution, referral services, affiliate application/commission services and ambassador activity/application services exist. Remaining gaps are complete attribution semantics, self/circular prevention, exactly-once commission/reward processing, first-VIP reward deduplication, ambassador approval/activity/pool distribution and ledger reconciliation.
 
-The server should prove that every key belongs to the current user's authorized upload set and cannot point to another user's object.
+## 14. Wallet/deposit/withdrawal/transfer/transaction-history audit
 
-## K-07 — KYC async processing is process-local
+### Wallet
 
-`submitKyc()` uses `setImmediate()` to run verification. A process restart can interrupt the verification job.
+Atomic debit behavior is present. Legacy `main` wallet and Task Vault-as-wallet-row require reconciliation with the canonical one-wallet + separate escrow model. Float accounting must be replaced.
 
-**P1:** use a durable job/outbox/queue model.
+### Fiat Deposit
 
-## K-08 — KYC provider integration is incomplete
+Current UX is bank/account-details based, but backend generates a local `BZ...` reference rather than creating a real Kora collection transaction. Provider reference/webhook/reconciliation is missing.
 
-AWS Rekognition/Textract are described but not implemented; `aws` mode falls back to manual.
+### Crypto Deposit
 
-## K-09 — KYC storage is incomplete for production
+Current USDT BEP-20/BSC exact-amount session strategy and backend blockchain monitor are materially present. Durable cursor/checkpoint, uniqueness constraints, replay protection and restart/multi-instance recovery remain required.
 
-Local filesystem is the default and S3/presigned URLs are stubs.
+### Fiat Withdrawal
 
-## K-10 — Admin approval does not consistently lock address
+Current unified `WithdrawalWizard` is the canonical UX: method → phone gate → bank setup → PIN → amount → confirmation → submission → status. Backend securely validates/limits/debits/records the withdrawal but does not yet execute the real Kora payout.
 
-Auto-approval sets `addressLockedByVerification`, while the admin approval path updates the KYC status/profile name but does not perform the same address-lock operation.
+### Crypto Withdrawal
 
-## K-11 — Admin KYC state can be mutated outside the review lifecycle
+Current unified wizard supports USDT BEP-20/BSC destination and backend internal debit/withdrawal creation. Actual on-chain payout execution is not implemented in the audited backend.
 
-Generic admin user verification endpoint permits direct status changes.
+### Transfer
 
-## K-12 — KYC notifications use process-local callbacks
+Atomic debit/credit exists. Request idempotency and complete ledger reconciliation remain required.
 
-Approval/rejection notifications are created via `setImmediate()` and can be lost on process termination.
+### Transaction History
 
-## K-13 — KYC document lifecycle needs retention/deletion rules
+Dedicated transaction APIs/admin surfaces exist. Historical currency/amount/fee/net/FX/provider-reference immutability and complete reconciliation require verification.
 
-Replacement/resubmission can leave old sensitive objects without an explicit retention/deletion workflow.
+## 15. Promotions, Monthly Events, Notifications and rewards
 
-## K-14 — Country/ID catalog is duplicated
+Promotion and Monthly Challenge modules exist. Scheduler durability, funding/eligibility, overlap/expiry, leaderboard correctness and exactly-once reward distribution remain required. Notification delivery exists but critical event generation includes process-local asynchronous work; durable outbox/queue semantics are required for security/financial/reward events.
 
-Frontend fallback list and backend supported-country list can diverge.
+## 16. Admin Panel flow audit
 
----
+Admin navigation and modules are materially present across Users, KYC, Financial, Tasks, Games, Football/AI, VIP, Referrals/Affiliates/Ambassadors, Challenges, Promotions, Auctions, Notifications, Content/Pages/Text, Security/Audit, Currency/Languages/Translations, Branding, Features, Settings, Analytics and AI Developer Center.
 
-# 8. VIP audit
+The dominant issues are:
 
-## V-01 — Unified VIP subscription exists
-
-The repository has one platform-wide VIP system.
-
-## V-02 — KYC status mismatch breaks eligibility
-
-VIP checks `approved`, while KYC uses `verified`.
-
-**P0.**
-
-## V-03 — Phone verification is not enforced
-
-**P0.**
-
-## V-04 — Task creation trusts active subscription rather than complete eligibility
-
-Task creation checks active subscription but does not independently require KYC + phone verification.
-
-**P1.**
-
-## V-05 — Admin custom-duration grants are missing
-
-The required 1-week, 2-week, 1-month, 3-month and 1-year administrative VIP grant capability is not present in the inspected service.
-
-## V-06 — VIP duration is structurally fixed at 30 days
-
-This conflicts with custom admin grants.
-
-## V-07 — Streak logic has atomic claim protection
-
-The guarded update is a positive implementation, but reward calculations and concurrency need E2E verification.
-
-## V-08 — VIP financial values use Float
-
-Subscription price and streak earnings are monetary Float fields.
-
----
-
-# 9. Task Marketplace / My Task / Proof audit
-
-## T-01 — VIP-only task creation exists
-
-## T-02 — Full task budget is escrowed before review
-
-The task service debits Task Wallet and credits `task_vault` atomically.
-
-## T-03 — Task Vault is modeled as a wallet row
-
-This conflicts with the intended conceptual separation between spendable wallet balances and task escrow.
-
-## T-04 — Task edit does not force re-review
-
-Confirmed mismatch: creator updates can preserve active/paused status instead of automatically returning the edited task to pending review.
-
-## T-05 — Protected task status is exposed to creator update schema
-
-Although restricted to active/paused, the status field should not permit creators to bypass review semantics.
-
-## T-06 — Reward tier settlement requires concurrency proof
-
-Free 35%, Verified 45%, VIP 65% must be derived from authoritative state at completion time.
-
-## T-07 — Proof AI/manual flow exists
-
-**P1:** durable worker, retry, idempotency and exact-once reward settlement need E2E proof.
-
-## T-08 — Frontend proof/integrity logic duplicates backend authority
-
-Client validation may remain UX-only but cannot determine approval/reward.
-
-## T-09 — My Task ownership and privacy require E2E tests
-
-## T-10 — Task screenshot/document storage inherits incomplete storage adapter
-
----
-
-# 10. Games audit
-
-## Shared game foundation
-
-**P1:** backend must remain authoritative for joins, stakes, balances, timers, locks, outcomes and settlement.
-
-**P1:** localStorage bet/round/settlement state must be removed as authority.
-
-**P1:** process-local runtime state must survive restart/multi-instance deployment through persistent state or durable coordination.
-
-**P1:** every money-moving game operation requires idempotency and concurrency tests.
-
-## Colour Prediction
-
-- Red/Blue multiplayer exists structurally.
-- Fee/accounting representation mismatch remains.
-- Join/round lifecycle is not production-proven.
-- Midnight displayed round reset versus continuous global identity requires deterministic timezone testing.
-- Frontend static lobby configuration can diverge from admin configuration.
-
-## PvP Coin Flip
-
-- 1v1/matchmaking/private match/stake flow exists structurally.
-- Requires full concurrency, settlement, timeout and Provably Fair E2E proof.
-
-## Dice Clash
-
-- 1v1/matchmaking/private match/stake flow exists structurally.
-- Requires tie, settlement, fairness and race-condition proof.
-
-## Dice Royale
-
-- User join/play lifecycle remains not production-proven.
-- Canonical rule is highest dice number wins.
-- Previous frontend copy used “highest unique roll,” which is incorrect.
-- Six-player cap, second-player countdown, 5-second lock and deterministic tie behavior require E2E tests.
-
-## Dice Arena
-
-- User join/play lifecycle remains not production-proven.
-- Third player must trigger countdown.
-- Six-player cap, 5-second lock, top-two winners and 60/40 settlement require concurrency proof.
-
-## Spin Battle
-
-- Stake-proportional winner selection is a P0 mismatch.
-- Wheel visual segments must match economic weights.
-- Twelve-player cap, countdown and lock require concurrency proof.
-- Provably Fair must verify the weighted selection independently.
-
-## Reaction Tap
-
-- 1v1 skill game exists structurally.
-- Requires anti-abuse, timing, settlement and E2E proof.
-- Provably Fair remains correctly excluded.
-
-## Provably Fair
-
-- Verification IDs/seed infrastructure exists.
-- Multiplayer verification is incomplete/inadequately rendered.
-- Spin Battle and multiplayer dice require player-list-aware verification.
-- Internal UUID exposure needs reduction where public identity is intended.
-
----
-
-# 11. Football AI Prediction audit
-
-The frontend and backend contain a dedicated Football AI product and extensive Admin Football/AI surfaces.
-
-## Findings
-
-- **P1:** provider ingestion and fallback behavior are not production-proven end-to-end.
-- **P1:** automatic prediction generation is not proven across multiple daily cycles.
-- **P1:** Free quota of exactly 2 games/day requires concurrency/idempotency testing.
-- **P1:** unified VIP gating must use the corrected KYC + phone eligibility definition.
-- **P1:** midnight timezone/rollover behavior requires deterministic tests.
-- **P1:** tomorrow's predictions must remain inaccessible until the correct day begins.
-- **P1:** Hub entry points must be idempotent and cannot repeatedly reward refresh/navigation.
-- **P1:** provider failures/stale fixtures must not silently become valid predictions.
-- **P1:** the Admin permission catalog gives `moderator_admin` `admin.football.manage`, including prediction-management semantics. This must be reconciled with the monitor-first automatic-AI requirement.
-- **P2:** provider secrets/configuration/health need production operational verification.
-
----
-
-# 12. Auction Marketplace audit
-
-User and Admin auction surfaces exist.
-
-## Findings
-
-- **P1:** complete admin-create → active → bid → end → winner → settlement → claim lifecycle is not production-proven.
-- **P1:** scheduler uses process-local intervals and needs restart/multi-instance safety.
-- **P1:** bid concurrency and reserved funds need race tests.
-- **P1:** outbid/release/settlement idempotency needs financial tests.
-- **P1:** auction wallet/ledger effects require reconciliation.
-- **P2:** inventory/claim/expired/cancelled states need E2E coverage.
-
----
-
-# 13. Referral / Affiliate / Ambassador audit
-
-## Findings
-
-- **P1:** referral and affiliate codes are resolved into an `uplineId`; the full semantic distinction among Referral, Affiliate and Ambassador lineage must be tested.
-- **P1:** self-referral/circular attribution prevention needs explicit tests.
-- **P1:** commission worker retry/exactly-once behavior needs tests.
-- **P1:** first-VIP referral reward must not duplicate on renewal/concurrency.
-- **P1:** ambassador application/approval/activity/pool distribution is not production-proven.
-- **P1:** Referral/Affiliate/Ambassador wallet settlement needs ledger reconciliation.
-- **P1:** admin management permissions require route-by-route authorization tests.
-
----
-
-# 14. Wallet / Financial audit
-
-## F-01 — Float-based accounting
-
-**P0/P1 systemic issue.**
-
-Wallets, transactions, deposits, withdrawals, tasks and VIP monetary fields use Float.
-
-## F-02 — Legacy `main` wallet remains
-
-`WalletType` and registration still include `main`.
-
-## F-03 — Task Vault remains a wallet row
-
-Must be reconciled with the intended escrow model.
-
-## F-04 — Atomic debit is a positive implementation
-
-`debitWallet()` uses a conditional update requiring sufficient balance and non-frozen state, reducing read-then-write race risk.
-
-**P1:** every caller must be verified to use the same primitive and record matching ledger entries.
-
-## F-05 — Generic credit path requires caller-level validation
-
-Every credit must enforce valid positive amount/business semantics and be paired with a ledger event.
-
-## F-06 — Deposit lifecycle not production-proven
-
-Provider confirmation, webhooks, idempotency and reconciliation require live/E2E verification.
-
-## F-07 — Withdrawal lifecycle not production-proven
-
-State transitions, limits, fees, PIN security, provider settlement and duplicate processing require E2E proof.
-
-## F-08 — Admin wallet mutation is high risk
-
-Credit/debit/freeze/unfreeze require strict least-privilege permissions, mandatory reason, immutable audit record and concurrency safety.
-
-## F-09 — Financial reconciliation is not proven globally
-
-All task/game/VIP/auction/referral/affiliate/promotion/withdrawal/deposit effects need ledger-to-balance reconciliation tests.
-
----
-
-# 15. Promotions / Challenges / Notifications audit
-
-## Promotions
-
-- Scheduler uses process-local interval.
-- Reward/funding/featured-placement financial effects require reconciliation.
-- Activation/expiry/overlap behavior requires E2E proof.
-
-## Monthly Challenges/Events
-
-- Structure exists.
-- Referral/ambassador/reward linkage requires complete lifecycle tests.
-- Reward distribution needs exactly-once proof.
-
-## Notifications
-
-- User and Admin notification modules exist.
-- Several critical notification calls use `setImmediate()`.
-- Critical events should use durable event/outbox/queue semantics.
-- Read/unread/delete/broadcast/template/translation behavior needs E2E proof.
-
----
-
-# 16. Translation / Language / Currency / Branding / Content audit
-
-Dedicated backend/admin surfaces exist.
-
-## Findings
-
-- **P1:** full-platform translation coverage is not proven.
-- **P1:** frontend/backend supported-language lists are duplicated.
-- **P1:** frontend/backend currency lists are duplicated.
-- **P1:** admin configuration propagation/cache invalidation needs testing.
-- **P1:** missing translation-key fallback needs deterministic behavior.
-- **P2:** final static scan is required for hardcoded user-facing strings that should be catalog-backed.
-
----
-
-# 17. Admin Panel — full audit
-
-The Admin Panel is broad and materially present. The remaining work is primarily functional correctness, authorization, lifecycle wiring and production proof.
-
-## AD-01 — Admin authentication/guard
-
-Frontend AdminLayout requires `admin.dashboard.view`, but child route components are not individually wrapped with their exact required permission. Backend route permissions remain the actual security boundary.
-
-**P1:** frontend route-level permissions should match backend permissions for correct UX and defense-in-depth.
-
-## AD-02 — Admin role management
-
-**P0:** role can be changed under generic `admin.users.edit` semantics. A dedicated Super Admin-only role-management capability is required.
-
-## AD-03 — Admin KYC
-
-**P0:** direct status mutation is too broad and not Super Admin-only.
-
-**P1:** approval must atomically synchronize KYC/profile/address lock.
-
-**P1:** sensitive document access requires private storage, short-lived access and audit.
-
-## AD-04 — Admin Users
-
-User detail includes profile, verification, VIP, balances, transactions, task summary, security and payment details.
-
-**P1:** field-level privacy/masking and least privilege need verification.
-
-**P1:** admin edit must follow the same profile validation rules as user-facing edit.
-
-## AD-05 — Admin Financial
-
-Deposits, withdrawals, transactions and wallets have dedicated routes/pages.
-
-**P1:** every financial mutation needs strict permission + audit + reconciliation proof.
-
-## AD-06 — Admin Tasks
-
-Task pending, marketplace, detail and proof review pages exist.
-
-**P1:** only authorized admin transitions should approve/reject; creators must not bypass review.
-
-## AD-07 — Admin Games
-
-Game configuration/management exists.
-
-**P1:** admin configuration must be the runtime source where configured, not shadowed by static frontend lobby constants.
-
-**P1:** historical round results must be immutable.
-
-## AD-08 — Admin VIP
-
-View/cancel/reset functionality exists.
-
-**P1:** custom-duration grant is missing.
-
-**P1:** grants/cancellations/resets need immutable audit records.
-
-## AD-09 — Admin Referral/Affiliate/Ambassador
-
-Surfaces exist.
-
-**P1:** permission and lifecycle tests are required for application approval, attribution, commissions and pool distribution.
-
-## AD-10 — Admin Football AI
-
-Dedicated Football/AI administration exists.
-
-**P1:** monitor-first semantics must be reconciled with any manual prediction-management permission.
-
-## AD-11 — Admin Auctions
-
-Dedicated admin auction page/routes exist.
-
-**P1:** full lifecycle and settlement need E2E proof.
-
-## AD-12 — Admin Promotions/Challenges
-
-Dedicated surfaces exist.
-
-**P1:** reward funding, scheduling and exact-once distribution need proof.
-
-## AD-13 — Admin Notifications/Content/Pages/Text
-
-Dedicated management surfaces exist.
-
-**P1:** every mutation requires correct permission, audit and translation/content propagation.
-
-## AD-14 — Admin Security/Audit/Compliance
-
-The frontend has dedicated security pages for events, login history, sessions, IP controls, fraud alerts and compliance.
-
-**P1:** page existence does not prove complete event coverage. Role changes, KYC decisions, financial mutations, security changes, VIP grants, task/game/admin actions and configuration changes must all be traceable.
-
-## AD-15 — Admin Settings/Configuration
-
-**P1:** configuration precedence across environment variables, SystemConfig, dedicated tables and frontend constants must be explicit.
-
-## AD-16 — Admin Developer Center
-
-The AI Developer Center exists.
-
-**P1:** generated/applicable patches require strict authorization, review, audit, rollback and post-fix verification.
-
----
-
-# 18. Database and security audit
-
-## DB-01 — Money uses Float
-
-P0/P1 systemic accounting issue.
-
-## DB-02 — Legacy wallet model
-
-`main` remains.
-
-## DB-03 — KYC lacks ID number field despite frontend collection
-
-Contract mismatch.
-
-## DB-04 — Phone verification has no challenge model
-
-No durable OTP state exists.
-
-## DB-05 — Public identity is not separated from internal UUID
-
-Needs dedicated public identifier if required by product.
-
-## DB-06 — JSON-as-text fields
-
-Requirements, metadata and several business structures use JSON strings. This reduces queryability/constraint strength and needs a final schema review.
-
-## DB-07 — RLS
-
-Historical Supabase observations showed RLS disabled on public tables. Current live Supabase policy state must be verified before production sign-off; repository code alone cannot establish it.
-
-## DB-08 — Sensitive document storage
-
-Local storage/default and incomplete S3 path are not acceptable for production KYC data.
-
----
-
-# 19. Runtime, workers and scheduled jobs
-
-The backend starts multiple workers/jobs including withdrawal resets, screenshot retention, audit retention, streak reminders, crypto deposits, commissions, AI analysis, football sync and auto-publishing. It also uses process-local intervals for promotions/auctions/private-room cleanup.
-
-## Findings
-
-- **P1:** process-local scheduling is vulnerable to restart and multi-instance duplication.
-- **P1:** `setImmediate()` is used for important verification, notifications and audit events; critical events can be lost on process termination.
-- **P1:** jobs require idempotency keys/locks/leases and durable retry state.
-- **P1:** restart recovery must be tested for games, KYC, Football AI, Auctions, Promotions, Commissions and Notifications.
-
----
-
-# 20. Frontend architecture audit
-
-## Findings
-
-- multiple API helper/transport implementations remain;
-- production-capable code contains localhost/empty API fallbacks;
-- localStorage is used for identity, profile, phone verification, KYC, wallet compatibility, bets, rounds, settlement and game history;
-- duplicate profile/proof/verification business logic exists;
-- static lobby configuration can diverge from backend admin configuration;
-- backend-authoritative data is not consistently treated as authoritative by contexts/services;
-- frontend automated test infrastructure is insufficient.
-
----
-
-# 21. Dead/duplicate/legacy code audit
-
-Cleanup candidates, only after dependency verification:
-
-- simulated phone OTP service;
-- simulated document verification service;
-- local KYC submission fallback;
-- local KYC progress/image storage;
-- duplicate profile business logic;
+- exact route/mutation authorization;
+- Super Admin-only privileged role changes;
+- controlled KYC overrides;
+- field-level privacy/masking;
+- immutable auditability;
+- configuration precedence and actual runtime effect;
+- financial reconciliation;
+- game configuration being the actual runtime source rather than shadowed static frontend constants;
+- AI Developer Center patch approval/verification/rollback safety;
+- child-route permission UX matching backend permissions.
+
+## 17. Database/security/runtime audit
+
+Confirmed or required:
+
+- Float monetary representation must be replaced with exact representation.
+- Legacy wallet structures require migration/cleanup.
+- Phone OTP needs a durable challenge model.
+- KYC needs production storage and document ownership constraints.
+- JSON/text business fields need final constraint/queryability review.
+- Supabase RLS live state must be verified before production sign-off.
+- Auth/OTP/KYC/financial/admin rate limits need durable enforcement.
+- Process-local workers, cursors, intervals and callbacks must be replaced/hardened with durable coordination.
+- Security headers/CORS/session/replay controls require production verification.
+
+## 18. Dead/duplicate/legacy audit
+
+Dependency verification is required before deletion of:
+
+- root `app/` duplicate frontend tree where proven unused;
+- simulated phone OTP;
+- simulated/local KYC verification;
+- local KYC PII/image progress;
+- duplicate profile/identity sources;
 - duplicate API transports;
-- local wallet/game/bet/settlement authority;
-- legacy `main` wallet support;
+- local game/bet/settlement authority;
+- local Spin Battle settlement idempotency;
+- legacy `main` wallet;
 - duplicate KYC status mutation paths;
-- static lobby configuration where backend configuration is authoritative;
-- obsolete/manual Football prediction paths conflicting with automatic AI;
-- process-local critical event callbacks after durable event migration;
-- stale feature flags/configuration;
-- dead services/components/routes discovered by dependency analysis.
+- static game/lobby configuration shadowing admin/backend configuration;
+- superseded local-only withdrawal dialogs/monitoring paths;
+- obsolete/manual Football prediction paths;
+- stale flags/comments and dead services/routes/components.
 
-No deletion should occur until references and runtime dependencies are verified.
+## 19. Testing/verification baseline
 
----
+Backend contains E2E tests, but complete platform evidence is insufficient. Frontend `package.json` has build/dev/preview scripts but no automated test script. Final verification must cover all identity, KYC, phone, VIP, task, game, Football, auction, growth/reward, financial and Admin flows, including concurrency, replay, restart and adversarial cases.
 
-# 22. Testing and production-proof audit
+## 20. Final audit status
 
-## Current state
+**BitZimi is not production-complete.** The codebase contains substantial implementation across the entire platform and Admin Panel, but authoritative identity/verification, financial execution, game authority, durable workers, security boundaries and full E2E proof remain incomplete.
 
-Frontend `package.json` has no automated test script. Backend has build/typecheck capability but the repository does not provide sufficient automated evidence for the complete platform lifecycle.
-
-## Required final verification
-
-### Identity/security
-
-- registration;
-- email verification;
-- login;
-- refresh/revocation;
-- password reset/change;
-- 2FA;
-- PIN;
-- phone OTP;
-- suspension/deactivation;
-- public identity/profile synchronization.
-
-### KYC
-
-- upload/ownership;
-- document replacement;
-- real verification/manual review;
-- approve/reject;
-- address lock;
-- resubmission;
-- storage/access/retention;
-- privileged admin controls.
-
-### Financial
-
-- deposits;
-- withdrawals;
-- transfers;
-- fees;
-- limits;
-- ledger reconciliation;
-- webhook idempotency;
-- concurrent debits/credits;
-- admin wallet operations.
-
-### Games
-
-Every game under normal, concurrent, timeout, duplicate-request and restart conditions.
-
-### Football AI
-
-Multiple simulated days, provider failure, quota, VIP gating and midnight rollover.
-
-### Auctions
-
-Create, bid, outbid, close, winner, settlement, claim and restart recovery.
-
-### Growth/rewards
-
-Referral, affiliate, ambassador, promotions, challenges and exactly-once rewards.
-
-### Admin
-
-Every admin route must be tested against every role for allow/deny behavior and privileged mutations.
-
----
-
-# 23. Final readiness matrix
-
-| Domain | Implementation exists | Major issue(s) | Production-proven |
-|---|---|---|---|
-| Registration | Yes | identity/attribution/phone | No |
-| Login | Yes | E2E/security proof | No |
-| Email verification | Yes | E2E/rate/replay proof | No |
-| Phone verification | Partial | simulated/client-authoritative | **No — P0** |
-| Profile/Identity | Yes | localStorage authority/duplicate paths | **No — P0/P1** |
-| Public user ID | Partial | UUID not separated | No |
-| KYC | Yes | fake/unfinished provider + storage | **No — P0** |
-| VIP | Yes | KYC status mismatch + phone gate | **No — P0** |
-| Tasks | Yes | edit/review/proof E2E | No |
-| Colour Prediction | Yes | lifecycle/accounting | No |
-| Coin Flip | Yes | concurrency/fairness proof | No |
-| Dice Clash | Yes | concurrency/fairness proof | No |
-| Dice Royale | Yes | join/rule lifecycle | No |
-| Dice Arena | Yes | join/countdown/settlement | No |
-| Spin Battle | Yes | stake-weighted winner | **No — P0** |
-| Reaction Tap | Yes | E2E/anti-abuse | No |
-| Provably Fair | Yes | multiplayer verification | No |
-| Football AI | Yes | automatic pipeline/timezone/quota | No |
-| Auctions | Yes | lifecycle/settlement | No |
-| Referral | Yes | attribution/idempotency | No |
-| Affiliate | Yes | lineage/commission proof | No |
-| Ambassador | Yes | lifecycle/distribution proof | No |
-| Wallet | Yes | Float/legacy main/escrow | **No — P0/P1** |
-| Deposits | Yes | provider/reconciliation | No |
-| Withdrawals | Yes | provider/state/reconciliation | No |
-| Promotions | Yes | scheduler/reward proof | No |
-| Challenges | Yes | lifecycle/reward proof | No |
-| Notifications | Yes | durable events | No |
-| Settings | Yes | authority/security propagation | No |
-| Translation | Yes | complete coverage/drift | No |
-| Admin Users | Yes | role escalation | **No — P0** |
-| Admin KYC | Yes | direct status override/storage | **No — P0** |
-| Admin Financial | Yes | authorization/reconciliation | No |
-| Admin Games | Yes | config/runtime/history | No |
-| Admin Tasks | Yes | workflow enforcement | No |
-| Admin VIP | Yes | custom grant missing | No |
-| Admin Football/AI | Yes | monitor-first policy proof | No |
-| Admin Auctions | Yes | settlement proof | No |
-| Admin Security/Audit | Yes | event completeness/durability | No |
-| Admin Developer Center | Yes | safe patch lifecycle | No |
-| Production infrastructure | Partial | RLS/storage/jobs/recovery | No |
-| Automated testing | Insufficient | full unit/integration/E2E | No |
-
----
-
-# 24. Immediate priority order
-
-## P0 security/integrity blockers
-
-1. Build real server-side phone verification and remove client-controlled `phoneVerified`.
-2. Normalize KYC status vocabulary and fix all cross-module status contracts.
-3. Enforce KYC + phone verification for VIP and all dependent privileged features.
-4. Remove fake/local KYC verification authority and local sensitive KYC fallback.
-5. Implement secure production KYC document storage/access and durable verification processing.
-6. Restrict role changes to explicit Super Admin-only permission and prevent privilege escalation.
-7. Remove generic direct KYC status mutation or make it an explicit Super Admin-only audited override.
-8. Replace Float monetary storage/calculation with exact financial representation.
-9. Remove localStorage as authentication/identity/verification/financial/game authority.
-10. Correct Spin Battle to stake-proportional winner selection with independently verifiable fairness.
-11. Verify/enforce Supabase RLS before production financial/identity use.
-
-## P1 completion blockers
-
-After P0 blockers, execute every phase in the updated completion roadmap and require implementation + tests + E2E + concurrency/failure testing + production configuration verification before sign-off.
-
----
-
-# 25. Audit conclusion
-
-BitZimi has substantial real implementation across the main platform and Admin Panel, but it is **not yet 100% production-ready**.
-
-The previous audit was incomplete because it did not sufficiently examine the entire identity and verification foundation or the complete Admin Panel privilege model. This re-audit corrects that gap.
-
-The most important newly identified blockers are:
-
-- simulated/client-authoritative phone verification;
-- incomplete/fake KYC verification and production storage;
-- KYC status contract mismatch that can block VIP;
-- missing phone enforcement for VIP/task-dependent access;
-- admin role escalation through generic user edit;
-- unrestricted admin KYC status mutation;
-- Float-based monetary accounting;
-- sensitive KYC information stored in browser localStorage;
-- incomplete durable processing/audit/storage infrastructure.
-
-The completion roadmap must therefore treat **Identity + Authentication + Phone Verification + KYC + Profile** as foundational work before dependent privileges, followed by the domain lifecycles, financial integrity, complete Admin Panel hardening, infrastructure resilience, cleanup and final automated/E2E production sign-off.
-
-**No phase is complete merely because the code compiles.**
-
----
-
-# 26. Deposit & Withdrawal Flow Audit — 2026-09-06
-
-This section was added after a dedicated audit of the actual BitZimi frontend flow and the corresponding backend deposit/withdrawal modules. The purpose was to understand the current UX/business sequence first and then identify only the corrections required for real financial execution.
-
-## 26.1 Current Withdraw entry and canonical UX
-
-The current Wallet page opens the unified `WithdrawalWizard`, not the older standalone bank/crypto dialogs. The audited wizard defines the current intended sequence as:
-
-**Method → Phone gate → Bank setup / Wallet setup → PIN setup → Amount/form → PIN confirmation → Submission → Success/status.**
-
-The wizard has two methods:
-
-- **Bank / Fiat:** registered bank destination.
-- **Crypto:** USDT BEP-20/BSC wallet destination.
-
-The current UX already attempts backend-authoritative limits and PIN verification, and its submission path calls `POST /api/v1/withdrawals` with a one-time PIN token. This is the correct foundation to preserve.
-
-### Corrections required without replacing the UX
-
-1. Phone verification must use backend-authoritative phone state. The current wizard still reads `userProfileService`/localStorage for the initial phone gate.
-2. Bank and crypto destination setup must be backend-authoritative; localStorage may not decide whether a destination exists or is valid.
-3. The wizard must not treat the local `depositMonitoringService` as proof of a pending/completed withdrawal.
-4. `onBalanceDeduct` must remain display synchronization only; the backend withdrawal transaction must be the sole financial debit authority.
-5. Success/completed UI must be driven by authoritative backend/provider state, not a locally created withdrawal session.
-
-## 26.2 Fiat withdrawal — current backend behavior
-
-Backend `POST /api/v1/withdrawals` currently:
-
-- checks the bank-withdrawal feature flag;
-- enforces minimum withdrawal;
-- verifies a one-time PIN token;
-- checks tier limits;
-- calculates fee;
-- checks aggregate available withdrawal balance;
-- atomically claims withdrawal-limit usage;
-- debits game → task → referral → affiliate → ambassador wallets atomically;
-- creates a `Withdrawal` row;
-- writes a ledger entry.
-
-This is a strong reservation/debit foundation, but it **does not submit a bank payout to a real provider**. There is no Kora payout call in this path. The withdrawal therefore stops at an internal pending/request state rather than completing the actual bank transfer.
-
-The current frontend's older `BankWithdrawalDialog` is also provider-less/local-state based and should not be restored as the active flow.
-
-### Required correction
-
-Preserve the unified bank withdrawal UX and connect the existing atomic financial foundation to the Kora payout lifecycle: provider reference/idempotency, pending state, webhook/query reconciliation, success finalization, failure release, retries and restart recovery.
-
-## 26.3 Crypto withdrawal — current behavior
-
-The repository contains an older standalone `CryptoWithdrawalDialog` that creates a local monitoring withdrawal and immediately calls `onBalanceDeduct`. It does not submit an on-chain transaction itself.
-
-The current unified `WithdrawalWizard` is the active frontend foundation and calls the backend withdrawal API. However, the backend `withdrawals.service.ts` also currently stops after internal debit + withdrawal record + ledger entry. The configuration contains `WITHDRAWAL_PRIVATE_KEY`/`WITHDRAWAL_WALLET_ADDRESS` as a future signing configuration, but the audited withdrawal service does not execute an on-chain payout.
-
-### Required correction
-
-Preserve the current unified USDT BEP-20 UX, but implement actual backend-controlled on-chain payout execution, durable transaction tracking, idempotency, confirmation/status reconciliation, failure handling and safe retry/recovery. No client callback or local monitoring state may finalize the payout.
-
-## 26.4 Current Fiat Deposit flow
-
-The active frontend bank-deposit dialog asks for an NGN amount, retrieves platform bank receiving details, creates a backend deposit session and monitors its status.
-
-However, the backend `createDeposit()` implementation currently generates a local `BZ...` reference for `paymentAddress` when `method === "bank"`. This is **not a Kora collection transaction**. There is no Kora checkout/virtual-account collection request, provider reference, provider webhook verification or Kora pay-in reconciliation in the audited deposit module.
-
-Therefore the current fiat deposit UX is understood and can be preserved, but its financial execution must be replaced with the confirmed Kora collection flow.
-
-### Required correction
-
-- Create the BitZimi transaction/reference and corresponding Kora collection transaction.
-- Use the correct Kora rail/currency.
-- Receive and authenticate Kora webhook events.
-- Reconcile Kora reference/status to the BitZimi deposit.
-- Credit the Game Wallet only after authoritative successful payment confirmation.
-- Support pending/failed/reversed/disputed states and idempotent replay.
-- Keep USD deposit disabled until Kora merchant activation is confirmed; do not expose unsupported collection rails.
-
-## 26.5 Current Crypto Deposit flow
-
-The current crypto deposit flow is materially closer to the intended architecture:
-
-1. User enters a USD amount.
-2. Backend creates a deposit session.
-3. Backend supplies the configured USDT BEP-20/BSC deposit address.
-4. Backend generates a unique exact `memoAmount`/price-tag amount for the active session.
-5. Frontend displays the exact amount and address and monitors the session.
-6. Backend `cryptoDepositMonitor` scans BSC USDT transfer events, matches the unique amount, waits for the configured confirmations, and atomically credits the user's Game Wallet.
-7. A completed deposit creates a completed transaction and notification.
-
-This flow should be preserved rather than replaced.
-
-### Corrections required
-
-- The monitor's processed-block cursor is process-local and must become durable for restart/multi-instance safety.
-- Blockchain matching/crediting must remain backend-only and idempotent.
-- The exact-amount uniqueness strategy must be protected by database-level constraints or an equivalent durable uniqueness guarantee, not only an application loop.
-- Historical transaction amount/currency/FX metadata must be immutable.
-- The frontend polling/local monitoring layer must remain display-only.
-
-## 26.6 Financial-flow conclusion
-
-The audit confirms that the current BitZimi **UX/business flow should be preserved**. The main missing pieces are financial execution and authoritative provider/blockchain reconciliation:
-
-- **Fiat Deposit:** current UX exists; Kora collection execution is missing.
-- **Crypto Deposit:** current UX + backend monitor exist; durability/constraint hardening is required.
-- **Fiat Withdrawal:** current unified UX + atomic internal debit exist; Kora payout execution is missing.
-- **Crypto Withdrawal:** current unified UX + internal debit foundation exist; actual on-chain payout execution is missing.
-
-These findings are completion blockers for the financial phase and are now explicitly incorporated into `completion road map v2.md`.
-
----
-
-# 27. External Kora capability check — 2026-09-06
-
-Current Kora documentation confirms that its payout API supports Nigerian NGN bank accounts, Kenyan KES bank accounts, South African ZAR bank accounts, and mobile-money payouts including KES and GHS; the payout API also documents destination currencies including NGN, KES, GHS, ZAR and USD, with special bank-country handling for USD/GBP destinations. Kora's current accept-payments documentation lists bank transfer/virtual-account/other collection channels by market, including NGN, KES, GHS and ZAR channels, while USD/GBP capability still requires merchant/product activation and must not be assumed active merely from generic API capability. citeturn0search0turn0search2turn0search14
-
-Kora also exposes pay-in history and payout history APIs and webhook confirmation mechanisms, which fit the required provider-reference/reconciliation architecture. citeturn0search10turn0search2
-
-**Audit rule:** generic Kora API capability is not the same as BitZimi merchant activation. Each currency/rail must remain disabled until the actual BitZimi Kora account is activated/configured for that rail.
-
----
-
-# 28. Updated immediate financial priorities
-
-1. Preserve the unified `WithdrawalWizard` UX and remove authority from local monitoring/localStorage.
-2. Connect fiat withdrawals to Kora payouts with atomic reservation, idempotency and webhook/query reconciliation.
-3. Implement real crypto withdrawal execution and durable on-chain reconciliation.
-4. Replace the current generated-BZ fiat deposit reference flow with Kora collection.
-5. Harden crypto deposit cursor, uniqueness and replay/restart behavior without changing its current unique-amount UX.
-6. Add currency/gross/fee/net/FX/provider-reference fields and immutable financial history where missing.
-7. Verify each Kora merchant rail before enabling it in production.
-
-**Updated conclusion:** BitZimi's deposit/withdrawal user journeys are substantially present, but the current fiat provider execution and crypto withdrawal execution are not production-complete. The existing user-facing flow should be retained and corrected at the financial/provider boundary rather than redesigned.
+The audit is now explicitly reconciled to the entire source-tree scope and the audited current deposit/withdrawal UX. The completion roadmap must contain every genuinely necessary blocker identified here and must not mark any phase complete until its original and newly discovered requirements are implemented and verified.
