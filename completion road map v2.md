@@ -8,16 +8,22 @@ This roadmap remains the master completion roadmap. It preserves the audited roa
 **Progress rule:** Every phase and every item starts as `[ ]`. A phase may change to `[✓]` only after every item under that phase has been implemented, tested, verified, re-tested where necessary, and confirmed fully passed. After confirmation, the completed phase and all of its items must be marked `[✓]` and committed to GitHub immediately. Incomplete phases remain `[ ]`.
 
 ## Mandatory implementation rules
-1. Backend is authoritative for identity, phone/KYC verification, VIP eligibility, financial state, game state, permissions, rewards and commissions.
-2. Never use localStorage as authority for KYC, phone verification, VIP status, balances, bets, settlements or rewards.
-3. Protect sensitive operations server-side regardless of frontend visibility.
-4. Use transactions, database constraints and idempotency for money, rewards, commissions, verification and settlement.
-5. Preserve existing BitZimi business rules and architecture; do not redesign unnecessarily.
-6. Remove dead/duplicate code only after dependency verification.
-7. Every phase ends with build/typecheck → tests → failure review → fixes → repeat verification.
-8. A phase is complete only after its real business flow is proven end-to-end.
-9. Provider capabilities and merchant activation must be verified before a transaction rail is exposed as active.
-10. Settings currency is display-only; it must never silently select or change a deposit/withdrawal rail.
+1. **Before starting ANY phase, the assistant must first read and follow this roadmap's Mandatory implementation rules, Canonical rules, and the complete checklist for the requested phase.** Reading the rules is the first step whenever a user asks to start, continue, resume, or work on a phase. Do not begin implementation or make assumptions before doing this.
+2. When a phase is started, everything currently listed under that phase is in scope and must be audited before implementation begins.
+3. If audit, code inspection, dependency analysis, business logic, or verification discovers a requirement that is genuinely necessary to make the current phase fully complete but is not already listed, it must be implemented and explicitly added under that same phase as an **Additional requirement discovered during implementation** item. Do not add arbitrary or unrelated work.
+4. Examples mentioned outside the roadmap are not automatically requirements. For example, **"Admin approval API"** and **"Wiring of frontend with backend"** must not be added to a phase unless the actual audit proves that they are genuinely necessary for that phase.
+5. A phase cannot be marked `[✓]` until every original checklist item **and every genuinely necessary additional requirement discovered during implementation** has been implemented, tested, verified and re-tested where necessary.
+6. Backend is authoritative for identity, phone/KYC verification, VIP eligibility, financial state, game state, permissions, rewards and commissions.
+7. Never use localStorage as authority for KYC, phone verification, VIP status, balances, bets, settlements or rewards.
+8. Protect sensitive operations server-side regardless of frontend visibility.
+9. Use transactions, database constraints and idempotency for money, rewards, commissions, verification and settlement.
+10. Preserve existing BitZimi business rules and architecture; do not redesign unnecessarily.
+11. Remove dead/duplicate code only after dependency verification.
+12. Every phase ends with build/typecheck → tests → failure review → fixes → repeat verification.
+13. A phase is complete only after its real business flow is proven end-to-end.
+14. Provider capabilities and merchant activation must be verified before a transaction rail is exposed as active.
+15. Settings currency is display-only; it must never silently select or change a deposit/withdrawal rail.
+16. After a phase passes all original and additional requirements, immediately update this master roadmap, mark the completed phase and its verified items `[✓]`, and commit the roadmap/code changes to GitHub before moving to the next phase.
 
 ## Canonical identity, phone, KYC and VIP rules
 
@@ -281,11 +287,9 @@ After dependency analysis remove:
 ## Phase 17 — Automated Testing, E2E & Final Sign-Off [ ]
 - [ ] Backend unit/integration/authorization/financial/concurrency/KYC/phone/game/worker tests.
 - [ ] Frontend automated test framework and CI.
-- [ ] E2E: registration → email → login/2FA → independent phone verification → KYC/Didit → profile → VIP → tasks → all games/fairness → Football AI → auction → referral/affiliate/ambassador → deposits/withdrawals → promotions/events/notifications → full admin.
-- [ ] Payment E2E: NGN/KES/ZAR/GHS enabled rails, USD withdrawal, GBP withdrawal; USD deposit remains disabled until Kora confirmation; GBP deposit remains unavailable.
-- [ ] Verify withdrawal phone gate for both unverified and already-verified users.
-- [ ] Adversarial tests: tampered payloads, expired tokens/OTPs, duplicate requests, races, cross-user IDs/document keys, replay, suspension/deactivation and restarts.
-- [ ] Final gate: no unresolved P0; no unresolved P1 without accepted risk; canonical rules verified; ledger reconciled; security and production integrations verified; final audit updated.
-
-## Final order
-**1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12 → 13 → 14 → 15 → 16 → 17**
+- [ ] Full E2E: registration → email verification → login/2FA → independent phone verification → KYC/Didit → profile → VIP → tasks → all games/fairness → Football AI → auction → referral/affiliate/ambassador → deposits/withdrawals → promotions/events/notifications → admin.
+- [ ] Payment E2E for NGN/KES/ZAR/GHS enabled rails, USD withdrawal and GBP withdrawal; USD deposit remains disabled pending Kora confirmation; GBP deposit remains unavailable.
+- [ ] Withdrawal phone-gate E2E for both unverified and already-verified users.
+- [ ] Adversarial/security/concurrency/replay/idempotency tests.
+- [ ] Final gate: no unresolved P0 issues; no P1 issues without accepted risk; canonical identity/phone/KYC/VIP rules verified; ledger reconciled; security and production integrations verified; final audit updated.
+- [ ] Final sign-off follows the phase order 1 → 17.
