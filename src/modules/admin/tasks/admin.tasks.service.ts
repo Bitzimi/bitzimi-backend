@@ -26,9 +26,11 @@ export async function adminGetTaskDetail(taskId: string) {
   return {
     ...serializeTask(task, true),
     referenceScreenshotUrls: task.referenceScreenshots.map(s => `/uploads/${s.storageKey}`),
-    budgetSpent, budgetRemaining: totalBudget - budgetSpent,
-    approvedBy: task.approvedBy ?? null, approvedAt: task.approvedAt?.toISOString() ?? null,
-    rejectedBy: task.rejectedBy ?? null, rejectedAt: task.rejectedAt?.toISOString() ?? null,
+    budgetSpent, budgetRemaining: Math.max(0, totalBudget - budgetSpent),
+    approvedBy: task.approvedBy ?? null,
+    approvedAt: task.approvedAt?.toISOString() ?? null,
+    rejectedBy: task.rejectedBy ?? null,
+    rejectedAt: task.rejectedAt?.toISOString() ?? null,
     rejectionReason: task.rejectionReason ?? null,
     proofs: proofs.map(p => ({ ...serializeProof(p), username: p.user?.profile?.username ?? "", screenshotUrls: p.screenshots.map(s => `/uploads/${s.storageKey}`) })),
   };
@@ -37,24 +39,59 @@ export async function adminGetTaskDetail(taskId: string) {
 export async function adminApproveTask(taskId: string, reviewerId: string) {
   const task = await db.task.findUnique({ where: { id: taskId } });
   if (!task) throw Object.assign(new Error("Task not found"), { statusCode: 404, code: "NOT_FOUND" });
-  if (task.status !== "pending_review") throw Object.assign(new Error(`Task status is "${task.status}" — only pending_review tasks can be approved`), { statusCode: 409, code: "INVALID_STATUS" });
-  const updated = await db.task.update({ where: { id: taskId }, data: { status: "active", approvedBy: reviewerId, approvedAt: new Date(), rejectedBy: null, rejectedAt: null, rejectionReason: null } });
+
+  const updated = await db.task.updateMany({
+    where: { id: taskId, status: "pending_review" },
+    data: { status: "active", approvedBy: reviewerId, approvedAt: new Date(), rejectedBy: null, rejectedAt: null, rejectionReason: null },
+  });
+  if (updated.count === 0) throw Object.assign(new Error(`Task status is "${task.status}" — only pending_review tasks can be approved`), { statusCode: 409, code: "INVALID_STATUS" });
+
+  const result = await db.task.findUniqueOrThrow({ where: { id: taskId } });
   setImmediate(() => createNotification({ userId: task.advertiserId, type: "task_approved", title: "Task Approved ✅", message: `Your task "${task.title}" has been approved and is now live in the marketplace.`, metadata: { taskId } }));
   setImmediate(() => handleFeaturedRequestOnTaskApproved(taskId).catch(() => {}));
-  return serializeTask(updated);
+  return serializeTask(result);
 }
 
 export async function adminRejectTask(taskId: string, reviewerId: string, reason: string) {
   const task = await db.task.findUnique({ where: { id: taskId } });
   if (!task) throw Object.assign(new Error("Task not found"), { statusCode: 404, code: "NOT_FOUND" });
-  if (task.status !== "pending_review") throw Object.assign(new Error(`Task status is "${task.status}" — only pending_review tasks can be rejected`), { statusCode: 409, code: "INVALID_STATUS" });
-  const updated = await db.$transaction(async (tx) => {
-    await debitWallet(tx, task.advertiserId, "task_vault", task.totalBudget);
-    await creditWallet(tx, task.advertiserId, "task", task.totalBudget);
-    await writeLedgerEntry(tx, { userId: task.advertiserId, type: "transfer", fromWallet: "task_vault", toWallet: "task", amount: task.totalBudget, description: "Task rejected — budget refunded", referenceId: taskId, referenceType: "task", metadata: { reason, reviewerId } });
-    return tx.task.update({ where: { id: taskId }, data: { status: "rejected", rejectedBy: reviewerId, rejectedAt: new Date(), rejectionReason: reason } });
+
+  const result = await db.$transaction(async (tx) => {
+    const claimed = await tx.task.updateMany({
+      where: { id: taskId, status: "pending_review" },
+      data: { status: "rejected", rejectedBy: reviewerId, rejectedAt: new Date(), rejectionReason: reason },
+    });
+    if (claimed.count === 0) throw Object.assign(new Error(`Task status is "${task.status}" — only pending_review tasks can be rejected`), { statusCode: 409, code: "INVALID_STATUS" });
+
+    // Refund only the unspent escrow. Completed proofs may already have consumed
+    // part of the Task Vault, so refunding totalBudget would over-credit the creator.
+    const paid = await tx.taskProof.aggregate({
+      where: { taskId, rewardPaid: true },
+      _sum: { rewardAmount: true },
+    });
+    const spent = paid._sum.rewardAmount ?? 0;
+    const refund = Math.max(0, task.totalBudget - spent);
+
+    if (refund > 0) {
+      await debitWallet(tx, task.advertiserId, "task_vault", refund);
+      await creditWallet(tx, task.advertiserId, "task", refund);
+      await writeLedgerEntry(tx, {
+        userId: task.advertiserId,
+        type: "transfer",
+        fromWallet: "task_vault",
+        toWallet: "task",
+        amount: refund,
+        description: "Task rejected — remaining budget refunded",
+        referenceId: taskId,
+        referenceType: "task",
+        metadata: { reason, reviewerId, spent },
+      });
+    }
+
+    return tx.task.findUniqueOrThrow({ where: { id: taskId } });
   });
-  setImmediate(() => createNotification({ userId: task.advertiserId, type: "task_rejected", title: "Task Requires Changes", message: `Your task "${task.title}" was not approved. Reason: ${reason}. Your budget has been returned to your task wallet.`, metadata: { taskId, reason } }));
+
+  setImmediate(() => createNotification({ userId: task.advertiserId, type: "task_rejected", title: "Task Requires Changes", message: `Your task "${task.title}" was not approved. Reason: ${reason}. Any unspent budget has been returned to your task wallet.`, metadata: { taskId, reason } }));
   setImmediate(() => handleFeaturedRequestOnTaskRejected(taskId, reviewerId).catch(() => {}));
-  return serializeTask(updated);
+  return serializeTask(result);
 }
