@@ -199,6 +199,11 @@ export async function getAllLobbyStates() { const states: Record<string, any> = 
 
 export async function getLobbyState(lobbyId: string, userId?: string) {
   await recoverStaleColorRounds();
+  // The API is also a state-advancement path: never return an old round after its 90s slot has ended.
+  const preSchedule = getGlobalRound();
+  if (Date.now() - preSchedule.startMs >= WAITING_DURATION_MS) {
+    await tickLobby(lobbyId);
+  }
   const state = await ensureLobby(lobbyId);
   const schedule = getGlobalRound();
   const elapsed = Math.max(0, Date.now() - schedule.startMs);
@@ -208,7 +213,7 @@ export async function getLobbyState(lobbyId: string, userId?: string) {
   const redBets = currentBets.filter(b => parseTeam(b.betData) === "red"), blueBets = currentBets.filter(b => parseTeam(b.betData) === "blue");
   let myBet: { team: string; amount: number; outcome: string | null; payout: number | null } | null = null;
   if (userId) { const bet = currentBets.find(b => b.userId === userId); if (bet) myBet = { team: parseTeam(bet.betData), amount: bet.amount, outcome: bet.outcome, payout: bet.payout ?? null }; }
-  const historyRows = await db.gameRound.findMany({ where: { gameType: "color_game", lobbyId: "A", status: { in: ["completed", "cancelled_insufficient_opposition"] } }, orderBy: { startedAt: "desc" }, take: 50, select: { roundNumber: true, dailyRoundNumber: true, resultData: true, settledAt: true, startedAt: true, status: true } });
+  const historyRows = await db.gameRound.findMany({ where: { gameType: "color_game", lobbyId, status: { in: ["completed", "cancelled_insufficient_opposition"] } }, orderBy: { startedAt: "desc" }, take: 10, select: { roundNumber: true, dailyRoundNumber: true, resultData: true, settledAt: true, startedAt: true, status: true } });
   const history = historyRows.map(r => { const data = r.resultData ? JSON.parse(r.resultData) : null; return { roundNumber: r.dailyRoundNumber ?? r.roundNumber, result: data?.result ?? null, voided: r.status === "cancelled_insufficient_opposition" || data?.voided === true, timestamp: r.settledAt?.toISOString() ?? r.startedAt.toISOString() }; }).filter(r => r.result !== null);
   const historyRoundRows = userId ? await db.gameRound.findMany({ where: { gameType: "color_game", lobbyId }, orderBy: { startedAt: "desc" }, take: 50, select: { id: true, roundNumber: true, dailyRoundNumber: true } }) : [];
   const historyRoundNumbers = new Map(historyRoundRows.map(r => [r.id, r.dailyRoundNumber ?? r.roundNumber]));
