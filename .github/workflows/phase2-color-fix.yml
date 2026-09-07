@@ -1,0 +1,187 @@
+name: Phase 2 Color Prediction Fix
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  fix-and-verify:
+    if: ${{ !contains(github.event.head_commit.message, 'Phase 2 Color Prediction fix') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Patch Color Prediction backend
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/modules/games/colorGame/colorGame.service.ts')
+          s = p.read_text()
+
+          old = '''      await db.$transaction(async (tx) => {
+        for (const bet of bets) {
+          await creditWallet(tx, bet.userId, "game", bet.amount);
+          await writeLedgerEntry(tx, {
+            userId: bet.userId, type: "transfer", toWallet: "game", amount: bet.amount,
+            description: "Color game void — full refund",
+            referenceId: bet.id, referenceType: "game_bet",
+          });
+          await tx.gameBet.update({ where: { id: bet.id }, data: { outcome: "draw", payout: bet.amount, platformFee: 0, settled: true, settledAt: new Date() } });
+        }
+      });'''
+          new = '''      await db.$transaction(async (tx) => {
+        for (const bet of bets) {
+          await creditWallet(tx, bet.userId, "game", bet.amount);
+          await writeLedgerEntry(tx, {
+            userId: bet.userId, type: "transfer", toWallet: "game", amount: bet.amount,
+            description: "Color game void — full refund",
+            referenceId: bet.id, referenceType: "game_bet",
+          });
+          await tx.gameBet.update({ where: { id: bet.id }, data: { outcome: "draw", payout: bet.amount, platformFee: 0, settled: true, settledAt: new Date() } });
+          await tx.notification.create({
+            data: {
+              userId: bet.userId,
+              type: "game_void",
+              title: "⚠️ Color Prediction Round Voided",
+              message: `Round ${state.roundNumber} was voided because only one side had bets. Your ${bet.amount.toFixed(2)} stake was fully refunded.`,
+              metadata: JSON.stringify({ game: "color_game", roundId, roundNumber: state.roundNumber, payout: bet.amount, voided: true }),
+            },
+          });
+        }
+      });'''
+          if old not in s:
+              raise SystemExit('void settlement block not found')
+          s = s.replace(old, new, 1)
+
+          old = '''      if (isWinner) {
+        const winProfit = (losingTotal - fee) * (bet.amount / winningTotal);
+        payout = bet.amount + winProfit;
+        await creditWallet(tx, bet.userId, "game", payout);
+        await writeLedgerEntry(tx, {
+          userId: bet.userId, type: "game_win", toWallet: "game", amount: payout,
+          description: `Color game win — team ${winningTeam}`,
+          referenceId: bet.id, referenceType: "game_bet", metadata: { team: winningTeam },
+        });
+      }
+
+      const userFee = bet.amount * feeRate;'''
+          new = '''      if (isWinner) {
+        const winProfit = (losingTotal - fee) * (bet.amount / winningTotal);
+        payout = bet.amount + winProfit;
+        await creditWallet(tx, bet.userId, "game", payout);
+        await writeLedgerEntry(tx, {
+          userId: bet.userId, type: "game_win", toWallet: "game", amount: payout,
+          description: `Color game win — team ${winningTeam}`,
+          referenceId: bet.id, referenceType: "game_bet", metadata: { team: winningTeam, roundId },
+        });
+        await tx.notification.create({
+          data: {
+            userId: bet.userId,
+            type: "game_win",
+            title: "🎉 Color Prediction Victory!",
+            message: `You won ${payout.toFixed(2)} on ${winningTeam.toUpperCase()} in round ${state.roundNumber}.`,
+            metadata: JSON.stringify({ game: "color_game", roundId, roundNumber: state.roundNumber, team: betTeam, winner: winningTeam, stake: bet.amount, payout }),
+          },
+        });
+      } else {
+        await writeLedgerEntry(tx, {
+          userId: bet.userId, type: "game_loss", fromWallet: "game", amount: bet.amount,
+          description: `Color game loss — team ${betTeam}`,
+          referenceId: bet.id, referenceType: "game_bet", metadata: { team: betTeam, winner: winningTeam, roundId },
+        });
+        await tx.notification.create({
+          data: {
+            userId: bet.userId,
+            type: "game_loss",
+            title: "Color Prediction Result",
+            message: `You lost ${bet.amount.toFixed(2)} on ${betTeam.toUpperCase()} in round ${state.roundNumber}.`,
+            metadata: JSON.stringify({ game: "color_game", roundId, roundNumber: state.roundNumber, team: betTeam, winner: winningTeam, stake: bet.amount, payout: 0 }),
+          },
+        });
+      }
+
+      const userFee = bet.amount * feeRate;'''
+          if old not in s:
+              raise SystemExit('normal settlement block not found')
+          s = s.replace(old, new, 1)
+
+          s = s.replace('''    result:     state.phase === "result" ? state.result : null,
+    voided:     state.voided,''', '''    // The authoritative result is published as soon as the 6-second spinning phase begins.
+    // This lets every client start its 6-second visual wheel animation immediately.
+    result:     state.result,
+    voided:     state.voided,''', 1)
+
+          old = '''  // Last 10 completed rounds for history display
+  const historyRows = await db.gameRound.findMany({
+    where:   { gameType: "color_game", lobbyId, status: "completed" },
+    orderBy: { roundNumber: "desc" },
+    take:    10,
+    select:  { roundNumber: true, resultData: true, settledAt: true },
+  });'''
+          new = '''  // Last completed rounds for the public result strip.
+  const historyRows = await db.gameRound.findMany({
+    where:   { gameType: "color_game", lobbyId, status: "completed" },
+    orderBy: { roundNumber: "desc" },
+    take:    10,
+    select:  { roundNumber: true, resultData: true, settledAt: true },
+  });
+
+  // Backend-authoritative personal bet history. Do not use localStorage for this.
+  const historyRoundRows = userId ? await db.gameRound.findMany({
+    where: { gameType: "color_game", lobbyId },
+    orderBy: { roundNumber: "desc" },
+    take: 50,
+    select: { id: true, roundNumber: true },
+  }) : [];
+  const historyRoundNumbers = new Map(historyRoundRows.map(r => [r.id, r.roundNumber]));
+  const personalBets = userId && historyRoundRows.length
+    ? await db.gameBet.findMany({
+        where: { userId, roundId: { in: historyRoundRows.map(r => r.id) } },
+        orderBy: { placedAt: "desc" },
+        take: 50,
+      })
+    : [];
+  const myBetHistory = personalBets.map(b => ({
+    id: b.id,
+    roundNumber: historyRoundNumbers.get(b.roundId) ?? 0,
+    team: JSON.parse(b.betData).team as "red" | "blue",
+    amount: b.amount,
+    timestamp: b.placedAt.toISOString(),
+    result: b.outcome === "win" ? "win" : b.outcome === "loss" ? "loss" : b.outcome === "draw" ? "draw" : undefined,
+    payout: b.payout ?? undefined,
+    lobbyId,
+  }));'''
+          if old not in s:
+              raise SystemExit('history block not found')
+          s = s.replace(old, new, 1)
+
+          old = '''    history,
+    myBet,
+  };'''
+          new = '''    history,
+    myBet,
+    myBetHistory,
+  };'''
+          if old not in s:
+              raise SystemExit('return block not found')
+          s = s.replace(old, new, 1)
+
+          p.write_text(s)
+          PY
+
+      - name: Verify backend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Commit backend fix and remove temporary workflow
+        run: |
+          rm -f .github/workflows/phase2-color-fix.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/modules/games/colorGame/colorGame.service.ts .github/workflows/phase2-color-fix.yml
+          git commit -m "Phase 2 Color Prediction fix: settlement history notifications and spin timing"
+          git push
