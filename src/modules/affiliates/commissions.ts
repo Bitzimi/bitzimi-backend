@@ -199,7 +199,7 @@ export async function distributeCommissions(opts: {
         description: `Tier ${tier} ${walletType} commission — ${eventType}`,
         referenceId: eventRefId,
         referenceType: isAmbassador ? "ambassador_commission" : "affiliate_commission",
-        metadata: { tier, eventType, sourceUserId, rate, programLevel: node.programLevel },
+        metadata: { tier, eventType, sourceUserId, rate, programLevel: node.programLevel, sourceLabel: `${eventType} commission`, destinationLabel: `${walletType} Wallet` },
       });
       results.push({ tier, beneficiaryId, commission, walletType });
     }

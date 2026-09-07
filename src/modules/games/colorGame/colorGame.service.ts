@@ -113,7 +113,7 @@ async function settleRound(lobbyId: string, state: LobbyState): Promise<void> {
     await db.$transaction(async tx => {
       for (const bet of bets) {
         await creditWallet(tx, bet.userId, "game", bet.amount);
-        await writeLedgerEntry(tx, { userId: bet.userId, type: "transfer", toWallet: "game", amount: bet.amount, description: `Color Prediction void — Lobby ${lobbyId}`, referenceId: bet.id, referenceType: "game_bet", metadata: { gameType: "color_game", lobby: lobbyId, roundId: state.roundId, roundNumber: state.dailyRoundNumber, voided: true } });
+        await writeLedgerEntry(tx, { userId: bet.userId, type: "game_void", toWallet: "game", amount: bet.amount, description: `Color Prediction void — Lobby ${lobbyId}`, referenceId: bet.id, referenceType: "game_bet", metadata: { gameType: "color_game", lobby: lobbyId, roundId: state.roundId, roundNumber: state.dailyRoundNumber, voided: true } });
         await tx.gameBet.update({ where: { id: bet.id }, data: { outcome: "draw", payout: bet.amount, platformFee: 0, settled: true, settledAt: new Date() } });
         await tx.notification.create({ data: { userId: bet.userId, type: "game_void", title: "⚠️ Color Prediction Round Voided", message: `Round ${state.dailyRoundNumber} was voided because only one side had bets. Your ${bet.amount.toFixed(2)} stake was fully refunded.`, metadata: JSON.stringify({ game: "color_game", roundId: state.roundId, roundNumber: state.dailyRoundNumber, payout: bet.amount, voided: true }) } });
       }

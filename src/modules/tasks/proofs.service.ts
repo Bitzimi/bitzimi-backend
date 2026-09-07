@@ -99,7 +99,7 @@ export async function processAIVerification(proofId: string): Promise<void> {
           await debitWallet(tx, proof.task.advertiserId, "task_vault", proof.rewardAmount ?? 0);
           await writeLedgerEntry(tx, { userId: proof.task.advertiserId, type: "transfer", fromWallet: "task_vault", amount: proof.rewardAmount ?? 0, description: "Task proof approved — worker paid", referenceId: proofId, referenceType: "task_proof", metadata: { taskId: proof.taskId, workerId: proof.userId } });
         }
-        await writeLedgerEntry(tx, { userId: proof.userId, type: "task_reward", toWallet: "task", amount: proof.rewardAmount ?? 0, description: "Task completed — reward credited", referenceId: proofId, referenceType: "task_proof", metadata: { taskId: proof.taskId } });
+        await writeLedgerEntry(tx, { userId: proof.userId, type: "task_reward", toWallet: "task", amount: proof.rewardAmount ?? 0, description: "Task completed — reward credited", referenceId: proofId, referenceType: "task_proof", metadata: { taskId: proof.taskId, sourceLabel: `Task: ${proof.task.title}`, destinationLabel: "Task Wallet" } });
         if ((proof.rewardAmount ?? 0) > 0) await tx.commissionJob.create({ data: { jobType: "distribute_commissions", payload: JSON.stringify({ sourceUserId: proof.userId, eventType: "task_completion", grossAmount: proof.rewardAmount ?? 0, eventRefId: proofId }) } });
       });
     } else if (verdict.verdict === "review") {
