@@ -20,8 +20,8 @@ jobs:
                   s=s.replace(old,'')
               s=s.replace('month: metadata.month ?? (raw.createdAt ? new Date(raw.createdAt).toLocaleString("en-US", { month: "long", year: "numeric" }) : null)','month: undefined')
               marker='  const lower = String(description ?? "").toLowerCase();'
-              inject='''  if (type === "affiliate_commission") metadata = { ...metadata, sourceLabel: metadata.sourceLabel ?? `${walletLabel(metadata.eventType ?? "Activity")} commission`, destinationLabel: metadata.destinationLabel ?? `${walletLabel(raw.toWallet ?? "affiliate")} Wallet` };\n  if (type === "ambassador_commission") metadata = { ...metadata, sourceLabel: metadata.sourceLabel ?? `${walletLabel(metadata.eventType ?? "Activity")} reward`, destinationLabel: metadata.destinationLabel ?? `${walletLabel(raw.toWallet ?? "ambassador")} Wallet` };\n  if (type === "referral_bonus") metadata = { ...metadata, sourceLabel: metadata.sourceLabel ?? "Referral Reward", destinationLabel: metadata.destinationLabel ?? `${walletLabel(raw.toWallet ?? "referral")} Wallet` };\n'''
-              if marker in s and 'if (type === "affiliate_commission") metadata = ' not in s:
+              inject='''  if (type === "affiliate_commission") metadata = { ...metadata, sourceLabel: metadata.sourceLabel ?? `${walletLabel(metadata.eventType ?? "Activity")} commission`, destinationLabel: metadata.destinationLabel ?? `${walletLabel(raw.toWallet ?? "affiliate")} Wallet` };\n  if (type === "ambassador_commission") metadata = { ...metadata, sourceLabel: metadata.sourceLabel ?? `${walletLabel(metadata.eventType ?? "Activity")} reward`, destinationLabel: metadata.destinationLabel ?? `${walletLabel(raw.toWallet ?? "ambassador")} Wallet` };\n  if (type === "referral_bonus") metadata = { ...metadata, sourceLabel: metadata.sourceLabel ?? "Referral Reward", destinationLabel: metadata.destinationLabel ?? `${walletLabel(raw.toWallet ?? "referral")} Wallet` };\n  if ((metadata.gameType || raw.referenceType === "game_round" || raw.referenceType === "pvp_match") && /\\b(void|refund|cancelled)\\b/i.test(description ?? "")) type = "game_void";\n'''
+              if marker in s and 'metadata.gameType || raw.referenceType === "game_round"' not in s:
                   s=s.replace(marker,inject+marker,1)
               p.write_text(s)
           p=Path('src/modules/games/colorGame/colorGame.service.ts'); s=p.read_text(); s=s.replace('type: "transfer", toWallet: "game", amount: bet.amount, description: `Color Prediction void — Lobby ${lobbyId}`','type: "game_void", toWallet: "game", amount: bet.amount, description: `Color Prediction void — Lobby ${lobbyId}`'); p.write_text(s)
@@ -35,5 +35,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add src/modules/wallets/wallets.service.ts src/modules/transactions/transactions.service.ts src/modules/games/colorGame/colorGame.service.ts src/modules/vip/vip.service.ts src/modules/tasks/proofs.service.ts src/modules/affiliates/commissions.ts
-          git diff --cached --quiet || git commit -m "Hydrate reward source details [transaction-details-fixed]"
-          git push
+          git diff --cached --quiet || git commit -m "Cover all transaction sources and game voids [transaction-details-fixed]"
+          git fetch origin main
+          git rebase origin/main
+          git push origin HEAD:main
