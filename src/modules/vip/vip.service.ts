@@ -164,7 +164,7 @@ export async function subscribeVIP(userId: string) {
     // Initialise streak record if needed
     await tx.vipStreak.upsert({ where: { userId }, create: { userId }, update: {} });
     await writeLedgerEntry(tx, {
-      userId, type: "transfer", fromWallet: "game", amount: vipPrice,
+      userId, type: "vip_purchase", fromWallet: "game", amount: vipPrice,
       description: "VIP subscription payment", referenceType: "vip_subscription",
     });
 
@@ -253,7 +253,7 @@ export async function claimDailyStreak(userId: string) {
     }
     await creditWallet(tx, userId, "game", rewardUSD);
     await writeLedgerEntry(tx, {
-      userId, type: "transfer", toWallet: "game", amount: rewardUSD,
+      userId, type: "streak_reward", toWallet: "game", amount: rewardUSD,
       description: `VIP daily streak reward — day ${newStreak}`,
       referenceType: "vip_streak", metadata: { day: newStreak },
     });

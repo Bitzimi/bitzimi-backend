@@ -33,19 +33,19 @@ async function hydrateTransaction(raw: any) {
   try {
     if (raw.referenceType === "withdrawal" && raw.referenceId) {
       const w = await db.withdrawal.findUnique({ where: { id: raw.referenceId }, select: { id: true, paymentMethod: true, destination: true, txHash: true, fee: true, netAmount: true, processedAt: true, status: true } });
-      if (w) metadata = { ...metadata, method: w.paymentMethod, destination: w.destination, txHash: w.txHash ?? metadata.txHash ?? null, withdrawalId: w.id, fee: dec(w.fee), netAmount: dec(w.netAmount), withdrawalStatus: w.status, processedAt: w.processedAt?.toISOString() ?? null, referenceCode: w.txHash ?? w.id };
+      if (w) metadata = { ...metadata, method: w.paymentMethod, destination: w.destination, txHash: w.txHash ?? metadata.txHash ?? null, withdrawalId: w.id, fee: dec(w.fee), netAmount: dec(w.netAmount), withdrawalStatus: w.status, processedAt: w.processedAt?.toISOString() ?? null, referenceCode: w.txHash ?? null, referenceKind: w.paymentMethod === "crypto" ? "blockchain_hash" : "bank_reference" };
     }
     if (raw.referenceType === "deposit" && raw.referenceId) {
       const d = await db.deposit.findUnique({ where: { id: raw.referenceId }, select: { id: true, paymentMethod: true, paymentAddress: true, txHash: true, confirmedAt: true, status: true } });
-      if (d) metadata = { ...metadata, method: d.paymentMethod, paymentAddress: d.paymentAddress, txHash: d.txHash ?? metadata.txHash ?? null, depositId: d.id, depositStatus: d.status, confirmedAt: d.confirmedAt?.toISOString() ?? null, referenceCode: d.txHash ?? d.id, network: d.paymentMethod === "crypto" ? "USDT BEP-20" : undefined };
+      if (d) metadata = { ...metadata, method: d.paymentMethod, paymentAddress: d.paymentAddress, txHash: d.txHash ?? metadata.txHash ?? null, depositId: d.id, depositStatus: d.status, confirmedAt: d.confirmedAt?.toISOString() ?? null, referenceCode: d.txHash ?? null, referenceKind: d.paymentMethod === "crypto" ? "blockchain_hash" : "bank_reference", network: d.paymentMethod === "crypto" ? "USDT BEP-20" : undefined };
     }
     if (raw.referenceType === "task_proof" && raw.referenceId) {
       const proof = await db.taskProof.findUnique({ where: { id: raw.referenceId }, select: { id: true, taskId: true, userId: true, rewardAmount: true, task: { select: { id: true, title: true, type: true, advertiserId: true } } } });
-      if (proof) metadata = { ...metadata, proofId: proof.id, taskId: proof.taskId, taskTitle: proof.task?.title, taskType: proof.task?.type, workerId: proof.userId, advertiserId: proof.task?.advertiserId, rewardAmount: proof.rewardAmount };
+      if (proof) metadata = { ...metadata, proofId: proof.id, taskId: proof.taskId, taskTitle: proof.task?.title, taskType: proof.task?.type, workerId: proof.userId, advertiserId: proof.task?.advertiserId, rewardAmount: proof.rewardAmount, sourceLabel: proof.task?.title ? `Task: ${proof.task.title}` : "Completed Task", destinationLabel: raw.toWallet ? `${walletLabel(raw.toWallet)} Wallet` : "Task Wallet" };
     }
     if (raw.referenceType === "referral" && raw.referenceId) {
       const r = await db.referral.findUnique({ where: { referredId: raw.referenceId }, select: { referredId: true, referrerId: true } });
-      if (r) metadata = { ...metadata, referredUserId: r.referredId, referrerId: r.referrerId, rewardTrigger: "First VIP purchase" };
+      if (r) metadata = { ...metadata, referredUserId: r.referredId, referrerId: r.referrerId, rewardTrigger: "First VIP purchase", sourceLabel: "Referral - First VIP purchase", destinationLabel: raw.toWallet ? `${walletLabel(raw.toWallet)} Wallet` : "Referral Wallet" };
     }
     if (raw.referenceType === "challenge_reward" && raw.referenceId) {
       const c = await db.referralChallenge.findUnique({ where: { id: raw.referenceId }, select: { id: true, title: true, period: true } });
@@ -76,10 +76,10 @@ async function hydrateTransaction(raw: any) {
   }
 
   const lower = String(description ?? "").toLowerCase();
-  if (type === "transfer" && /colour\s+prediction.*void|color\s+prediction.*void|colour\s+game.*void|color\s+game.*void/.test(lower)) type = "game_void";
+  if ((metadata.voided === true || metadata.voided === "true") || (type === "transfer" && /colour\s+prediction.*void|color\s+prediction.*void|colour\s+game.*void|color\s+game.*void/.test(lower))) type = "game_void";
   if (type === "transfer" && raw.fromWallet && raw.toWallet) description = `Wallet Transfer - ${walletLabel(raw.fromWallet)} Wallet → ${walletLabel(raw.toWallet)} Wallet`;
-  if (raw.referenceType === "vip_subscription") { metadata = { ...metadata, subscriptionType: "VIP", subscriptionPlan: "Monthly", durationDays: 30, method: "Wallet", fromWallet: raw.fromWallet ?? "game" }; description = "VIP Subscription - Monthly"; }
-  if (raw.referenceType === "vip_streak") { metadata = { ...metadata, rewardType: "VIP Daily Streak Reward", streakDay: metadata.day ?? null, destinationWallet: raw.toWallet ?? "game" }; description = `VIP Daily Streak Reward${metadata.streakDay ? ` - Day ${metadata.streakDay}` : ""}`; }
+  if (raw.referenceType === "vip_subscription" || type === "vip_purchase") { type = "vip_purchase"; metadata = { ...metadata, subscriptionType: "VIP", subscriptionPlan: metadata.subscriptionPlan ?? "Monthly", durationDays: metadata.durationDays ?? 30, method: "Wallet", sourceLabel: `${walletLabel(raw.fromWallet ?? "game")} Wallet`, destinationLabel: "VIP Membership" }; description = `VIP Subscription - ${metadata.subscriptionPlan}`; }
+  if (raw.referenceType === "vip_streak" || type === "streak_reward") { type = "streak_reward"; metadata = { ...metadata, rewardType: "Daily Streak", streakDay: metadata.day ?? metadata.streakDay ?? null, sourceLabel: "Daily Streak", destinationLabel: `${walletLabel(raw.toWallet ?? "game")} Wallet`, month: metadata.month ?? (raw.createdAt ? new Date(raw.createdAt).toLocaleString("en-US", { month: "long", year: "numeric" }) : null) }; description = `Daily Streak Reward${metadata.streakDay ? ` - Day ${metadata.streakDay}` : ""}`; }
   if (type === "referral_bonus") description = `Referral Bonus - ${metadata.rewardTrigger ?? "Referral reward"}`;
   if (type === "affiliate_commission") description = `Affiliate Commission - Tier ${metadata.tier ?? ""} - ${walletLabel(metadata.eventType ?? "commission")}`.replace(/- $/, "");
   if (type === "ambassador_commission") description = `Ambassador Reward - Tier ${metadata.tier ?? ""} - ${walletLabel(metadata.eventType ?? "commission")}`.replace(/- $/, "");
@@ -99,6 +99,7 @@ async function hydrateTransaction(raw: any) {
     description = `${gameLabel(metadata.gameType)} ${action}${context ? ` - ${context}` : ""}`;
   }
 
+  if (type !== "deposit" && type !== "withdrawal") { delete metadata.referenceCode; delete metadata.referenceKind; }
   return { ...raw, type, description, metadata: Object.keys(metadata).length ? JSON.stringify(metadata) : null };
 }
 
