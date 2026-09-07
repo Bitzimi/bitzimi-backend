@@ -344,17 +344,26 @@ export async function getAllLobbyStates() {
 }
 
 export async function getLobbyState(lobbyId: string, userId?: string) {
-  const state = await ensureLobby(lobbyId);
-  const schedule = getGlobalRound();
-  const elapsed = Math.max(0, Date.now() - schedule.startMs);
-  const cfg = LOBBY_CONFIG[lobbyId];
-
-  // Keep the authoritative schedule phase aligned even when the server process was restarted.
-  if (state.dailyRoundNumber === schedule.dailyRoundNumber) {
-    if (elapsed < WAITING_DURATION_MS) state.phase = "waiting";
-    else if (elapsed < WAITING_DURATION_MS + SPINNING_DURATION_MS) state.phase = "spinning";
-    else state.phase = "result";
+  // Synchronize the lifecycle before building the response. The previous implementation
+  // inferred SPINNING/RESULT by mutating the in-memory phase without executing the
+  // corresponding transition. A request arriving during the 6-second spin window could
+  // therefore turn a WAITING round directly into RESULT, leaving bets unsettled and the
+  // wheel without its authoritative winner.
+  let state = await ensureLobby(lobbyId);
+  let schedule = getGlobalRound();
+  let elapsed = Math.max(0, Date.now() - schedule.startMs);
+  const transitionDue =
+    (state.phase === "waiting" && elapsed >= WAITING_DURATION_MS) ||
+    (state.phase === "spinning" && elapsed >= WAITING_DURATION_MS + SPINNING_DURATION_MS) ||
+    (state.phase === "result" && elapsed >= ROUND_DURATION_MS) ||
+    state.dailyRoundNumber !== schedule.dailyRoundNumber;
+  if (transitionDue) {
+    await tickLobby(lobbyId);
+    state = await ensureLobby(lobbyId);
+    schedule = getGlobalRound();
+    elapsed = Math.max(0, Date.now() - schedule.startMs);
   }
+  const cfg = LOBBY_CONFIG[lobbyId];
 
   const currentBets = await db.gameBet.findMany({
     where: { roundId: state.roundId },
@@ -372,20 +381,28 @@ export async function getLobbyState(lobbyId: string, userId?: string) {
   }
 
   const historyRows = await db.gameRound.findMany({
-    where: { gameType: "color_game", lobbyId, status: { in: ["completed", "cancelled_insufficient_opposition"] } },
+    where: {
+      gameType: "color_game",
+      lobbyId,
+      status: { in: ["completed", "cancelled_insufficient_opposition", "result"] },
+      id: { not: state.roundId },
+    },
     orderBy: { startedAt: "desc" },
-    take: 10,
+    take: 30,
     select: { roundNumber: true, dailyRoundNumber: true, resultData: true, settledAt: true, startedAt: true, status: true },
   });
-  const history = historyRows.map(r => {
-    const data = r.resultData ? JSON.parse(r.resultData) : null;
-    return {
-      roundNumber: r.dailyRoundNumber ?? r.roundNumber,
-      result: data?.result ?? null,
-      voided: r.status === "cancelled_insufficient_opposition" || data?.voided === true,
-      timestamp: r.settledAt?.toISOString() ?? r.startedAt.toISOString(),
-    };
-  }).filter(r => r.result !== null);
+  const history = historyRows
+    .map(r => {
+      const data = r.resultData ? JSON.parse(r.resultData) : null;
+      return {
+        roundNumber: r.dailyRoundNumber ?? r.roundNumber,
+        result: data?.result ?? null,
+        voided: r.status === "cancelled_insufficient_opposition" || data?.voided === true,
+        timestamp: r.settledAt?.toISOString() ?? r.startedAt.toISOString(),
+      };
+    })
+    .filter(r => r.result !== null)
+    .slice(0, 10);
 
   const historyRoundRows = userId ? await db.gameRound.findMany({
     where: { gameType: "color_game", lobbyId },
