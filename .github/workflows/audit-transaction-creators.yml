@@ -1,0 +1,19 @@
+name: Audit transaction creators
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: List all ledger writers and transaction types
+        run: |
+          echo '=== writeLedgerEntry calls ==='
+          grep -RIn --exclude-dir=node_modules --exclude='*.map' 'writeLedgerEntry' src || true
+          echo '=== direct transaction creates ==='
+          grep -RIn --exclude-dir=node_modules --exclude='*.map' 'transaction.create' src || true
+          echo '=== transaction type literals ==='
+          grep -RIn --exclude-dir=node_modules --exclude='*.map' 'type: "' src/modules src/jobs | grep -Ei 'deposit|withdraw|transfer|reward|bonus|commission|game|vip|streak|challenge|auction|featured|task' || true
