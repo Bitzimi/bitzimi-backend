@@ -1,0 +1,77 @@
+name: Fix Color Prediction Backend
+on:
+  push:
+    branches: [fix/color-prediction-global-result-void-transactions]
+    paths:
+      - '.github/workflows/fix-color-prediction-backend.yml'
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply backend fixes
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          p=Path('src/modules/games/colorGame/colorGame.service.ts'); s=p.read_text()
+
+          # Add deterministic shared presentation angle and state field.
+          s=s.replace('import { db } from "../../../db";', 'import { db } from "../../../db";\nimport { createHash } from "crypto";')
+          s=s.replace('  clientSeed: string | null;\n}', '  clientSeed: string | null;\n  spinAngle: number | null;\n}')
+          s=s.replace('    clientSeed: null,\n  };', '    clientSeed: null,\n    spinAngle: null,\n  };')
+
+          # Restore the result phase for the full 5-second result window after a void.
+          s=s.replace('data: { status: "cancelled_insufficient_opposition", settledAt: new Date(), resultData: JSON.stringify({ result: state.result, voided: true }) }', 'data: { status: "result", settledAt: new Date(), resultData: JSON.stringify({ result: state.result, voided: true, settled: true }) }')
+
+          # Replace per-lobby result derivation with one global result for the daily round.
+          old='''async function enterSpinning(lobbyId: string, state: LobbyState): Promise<void> {\n  if (state.phase !== "waiting") return;\n  state.phase = "spinning";\n  state.phaseStartedAt = Date.now();\n  const bettors = await db.gameBet.findMany({ where: { roundId: state.roundId }, select: { userId: true } });\n  const sortedIds = [...new Set(bettors.map(b => b.userId))].sort();\n  const clientSeed = generateClientSeed(...sortedIds, state.roundId);\n  state.clientSeed = clientSeed;\n  state.result = deriveColorResult(state.serverSeed, clientSeed, state.roundNumber);\n  await db.gameRound.update({\n    where: { id: state.roundId },\n    data: { status: "spinning", clientSeed, nonce: state.roundNumber, resultData: JSON.stringify({ result: state.result }) },\n  });\n}'''
+          new='''async function enterSpinning(lobbyId: string, state: LobbyState): Promise<void> {\n  if (state.phase !== "waiting") return;\n  state.phase = "spinning";\n  state.phaseStartedAt = Date.now();\n\n  // Colour Prediction has one global result stream. Every lobby shares the same\n  // server seed/result for a scheduled daily round; only the betting pool remains lobby-specific.\n  const schedule = getGlobalRound();\n  let sourceRound = lobbyId === "A"\n    ? await db.gameRound.findUnique({ where: { id: state.roundId } })\n    : await db.gameRound.findFirst({ where: { gameType: "color_game", lobbyId: "A", dailyRoundNumber: state.dailyRoundNumber }, orderBy: { startedAt: "desc" } });\n  if (!sourceRound) {\n    const sourceState = await createScheduledRound("A", schedule.dailyRoundNumber, schedule.startMs);\n    sourceRound = await db.gameRound.findUnique({ where: { id: sourceState.roundId } });\n  }\n  const roundIds = await db.gameRound.findMany({\n    where: { gameType: "color_game", dailyRoundNumber: state.dailyRoundNumber },\n    select: { id: true },\n  });\n  const allBets = roundIds.length\n    ? await db.gameBet.findMany({ where: { roundId: { in: roundIds.map(r => r.id) } }, select: { userId: true } })\n    : [];\n  const sortedIds = [...new Set(allBets.map(b => b.userId))].sort();\n  const clientSeed = generateClientSeed(...sortedIds, `global:${state.dailyRoundNumber}`);\n  const globalServerSeed = sourceRound?.serverSeed ?? state.serverSeed;\n  const globalServerSeedHash = sourceRound?.serverSeedHash ?? hashServerSeed(globalServerSeed);\n  const globalResult = deriveColorResult(globalServerSeed, clientSeed, state.dailyRoundNumber);\n  const spinDigest = createHash("sha256").update(`color-spin:${state.dailyRoundNumber}`).digest();\n  const spinAngle = spinDigest.readUInt32BE(0) % 360;\n\n  state.serverSeed = globalServerSeed;\n  state.serverSeedHash = globalServerSeedHash;\n  state.clientSeed = clientSeed;\n  state.result = globalResult;\n  state.spinAngle = spinAngle;\n\n  await db.gameRound.update({\n    where: { id: state.roundId },\n    data: { status: "spinning", serverSeed: globalServerSeed, serverSeedHash: globalServerSeedHash, clientSeed, nonce: state.dailyRoundNumber, resultData: JSON.stringify({ result: globalResult, spinAngle }) },\n  });\n}'''
+          if old in s: s=s.replace(old,new)
+
+          # State recovery must restore the shared wheel angle from persisted result data.
+          s=s.replace('      clientSeed: active.clientSeed ?? null,\n    };', '      clientSeed: active.clientSeed ?? null,\n      spinAngle: typeof resultData?.spinAngle === "number" ? resultData.spinAngle : null,\n    };')
+
+          # Expose authoritative angle to every client.
+          s=s.replace('    clientSeed: state.clientSeed,\n    phase:', '    clientSeed: state.clientSeed,\n    spinAngle: state.spinAngle,\n    phase:')
+
+          # Previous Results is a global feed, not a per-lobby feed. Lobby A is the canonical scheduled result stream.
+          s=s.replace('where: { gameType: "color_game", lobbyId, status: { in: ["completed", "cancelled_insufficient_opposition"] } },', 'where: { gameType: "color_game", lobbyId: "A", status: { in: ["completed", "cancelled_insufficient_opposition"] } },')
+
+          # Personal bet history must always expose a settled void as draw/refunded, never pending.
+          s=s.replace('result: b.outcome === "win" ? "win" : b.outcome === "loss" ? "loss" : b.outcome === "draw" ? "draw" : undefined,', 'result: b.settled ? (b.outcome === "win" ? "win" : b.outcome === "loss" ? "loss" : "draw") : "pending",')
+
+          # Colour Prediction transaction metadata: game label + actual lobby used.
+          s=s.replace('metadata: { team: betTeam, winner: winningTeam, roundId: state.roundId, roundNumber: state.dailyRoundNumber, stake: bet.amount, payout: 0 },', 'metadata: { gameType: "color_prediction", lobby: lobbyId, team: betTeam, winner: winningTeam, roundId: state.roundId, roundNumber: state.dailyRoundNumber, stake: bet.amount, payout: 0 },')
+          s=s.replace('metadata: { team: winningTeam, roundId: state.roundId, roundNumber: state.dailyRoundNumber, stake: bet.amount, payout },', 'metadata: { gameType: "color_prediction", lobby: lobbyId, team: winningTeam, roundId: state.roundId, roundNumber: state.dailyRoundNumber, stake: bet.amount, payout },')
+          s=s.replace('metadata: { gameType: "color_game", roundId: state.roundId, roundNumber: state.dailyRoundNumber, voided: true },', 'metadata: { gameType: "color_prediction", lobby: lobbyId, roundId: state.roundId, roundNumber: state.dailyRoundNumber, voided: true, stake: bet.amount },')
+
+          p.write_text(s)
+
+          # Centralize game transaction naming while preserving non-game transaction descriptions.
+          p=Path('src/modules/wallets/wallets.service.ts'); s=p.read_text()
+          marker='export async function writeLedgerEntry'
+          if marker in s and 'function formatGameLedgerDescription' not in s:
+            helper='''\nconst GAME_LABELS: Record<string, string> = {\n  color_game: "Colour Prediction", color_prediction: "Colour Prediction", spin_battle: "Spin Battle",\n  dice_clash: "Dice Clash", dice_royale: "Dice Royale", dice_arena: "Dice Arena",\n  reaction_tap: "Reaction Tap", coin_flip: "Coin Flip",\n};\n\nfunction formatGameLedgerDescription(type: string, metadata: any, fallback: string): string {\n  const gameType = metadata?.gameType;\n  if (!gameType) return fallback;\n  const label = GAME_LABELS[String(gameType)] ?? String(gameType).replace(/_/g, " ");\n  const outcome = type === "game_win" ? "Win" : type === "game_loss" ? "Loss" : metadata?.voided ? "Refund" : null;\n  if (!outcome) return fallback;\n  const context = metadata?.lobby ? `Lobby ${metadata.lobby}` : metadata?.stake != null ? `Stake Room $${Number(metadata.stake).toFixed(2).replace(/\\.00$/, "")}` : null;\n  return `${label} ${outcome}${context ? ` - ${context}` : ""}`;\n}\n\n'''
+            s=s.replace(marker, helper+marker)
+          # Make game ledger descriptions deterministic from metadata.
+          s=re.sub(r'(export async function writeLedgerEntry[\\s\\S]*?)(return [^;]+;)', lambda m:m.group(1)+m.group(2), s, count=1)
+          # Insert description normalization immediately inside the function body after its opening brace.
+          s=s.replace('export async function writeLedgerEntry(entry:', 'export async function writeLedgerEntry(entry:')
+          s=re.sub(r'(export async function writeLedgerEntry\([^\n]+\)\s*\{)', r'\1\n  if ((entry as any).metadata?.gameType && ["game_win", "game_loss"].includes((entry as any).type)) {\n    (entry as any).description = formatGameLedgerDescription((entry as any).type, (entry as any).metadata, (entry as any).description);\n  }', s, count=1)
+          p.write_text(s)
+
+      - name: Build
+        run: npm install && npm run build
+      - name: Commit and remove workflow
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm -f .github/workflows/fix-color-prediction-backend.yml
+          git add src/modules/games/colorGame/colorGame.service.ts src/modules/wallets/wallets.service.ts
+          git commit -m 'Fix global Color Prediction result and game transaction records'
+          git push
