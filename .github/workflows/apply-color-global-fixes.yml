@@ -1,0 +1,64 @@
+name: Apply Color Prediction Global Fixes
+on:
+  push:
+    branches: [fix/color-prediction-global-results-settlement]
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch Color Prediction service
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/modules/games/colorGame/colorGame.service.ts')
+          s = p.read_text()
+
+          # Ensure settlement metadata identifies the actual lobby and uses the
+          # global result context. This is consumed by Wallet transaction UI.
+          s = s.replace('metadata: { gameType: "color_game", roundId: state.roundId, roundNumber: state.dailyRoundNumber, voided: true }', 'metadata: { gameType: "color_game", lobby: lobbyId, roundId: state.roundId, roundNumber: state.dailyRoundNumber, voided: true }')
+          s = s.replace('metadata: { team: winningTeam, roundId: state.roundId, roundNumber: state.dailyRoundNumber, stake: bet.amount, payout }', 'metadata: { gameType: "color_game", lobby: lobbyId, team: winningTeam, roundId: state.roundId, roundNumber: state.dailyRoundNumber, stake: bet.amount, payout }')
+          s = s.replace('metadata: { team: betTeam, winner: winningTeam, roundId: state.roundId, roundNumber: state.dailyRoundNumber, stake: bet.amount, payout: 0 }', 'metadata: { gameType: "color_game", lobby: lobbyId, team: betTeam, winner: winningTeam, roundId: state.roundId, roundNumber: state.dailyRoundNumber, stake: bet.amount, payout: 0 }')
+          s = s.replace('description: "Color game void — full refund"', 'description: `Color Prediction void — Lobby ${lobbyId}`')
+          s = s.replace('description: `Color game win — team ${winningTeam}`', 'description: `Color Prediction win — Lobby ${lobbyId}`')
+          s = s.replace('description: `Color game loss — team ${betTeam}`', 'description: `Color Prediction loss — Lobby ${lobbyId}`')
+
+          # Insert a single canonical server seed/client seed per scheduled global
+          # round. The existing per-lobby round rows remain the permanent IDs, but
+          # all lobbies use the same verified result for a given daily round.
+          marker = 'async function enterSpinning(lobbyId: string, state: LobbyState): Promise<void> {'
+          helper = '''async function getGlobalColorFairnessSeed(dailyRoundNumber: number, fallbackSeed: string): Promise<string> {\n  return db.$transaction(async tx => {\n    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`color-global:${dailyRoundNumber}`}))`;\n    const canonical = await tx.gameRound.findFirst({\n      where: { gameType: "color_game", dailyRoundNumber, serverSeed: { not: null } },\n      orderBy: { startedAt: "asc" },\n      select: { serverSeed: true },\n    });\n    const seed = canonical?.serverSeed ?? fallbackSeed;\n    await tx.gameRound.updateMany({\n      where: { gameType: "color_game", dailyRoundNumber, status: { in: ["waiting", "spinning", "result"] } },\n      data: { serverSeed: seed, serverSeedHash: hashServerSeed(seed) },\n    });\n    return seed;\n  });\n}\n\n'''
+          if marker in s and 'async function getGlobalColorFairnessSeed' not in s:
+              s = s.replace(marker, helper + marker)
+
+          # Provably-fair result is global by scheduled round, not by bettor list.
+          old = '''  const bettors = await db.gameBet.findMany({ where: { roundId: state.roundId }, select: { userId: true } });\n  const sortedIds = [...new Set(bettors.map(b => String(b.userId)))].sort();\n  const clientSeed: string = String(generateClientSeed(...sortedIds, String(state.roundId)));\n  const result = deriveColorResult(String(state.serverSeed), clientSeed, Number(state.dailyRoundNumber));\n  state.clientSeed = clientSeed; state.result = result; state.serverSeedHash = hashServerSeed(String(state.serverSeed));'''
+          new = '''  const globalServerSeed = await getGlobalColorFairnessSeed(state.dailyRoundNumber, String(state.serverSeed));\n  const clientSeed: string = `color-global-${state.dailyRoundNumber}`;\n  const result = deriveColorResult(globalServerSeed, clientSeed, Number(state.dailyRoundNumber));\n  state.serverSeed = globalServerSeed;\n  state.clientSeed = clientSeed;\n  state.result = result;\n  state.serverSeedHash = hashServerSeed(globalServerSeed);'''
+          if old in s:
+              s = s.replace(old, new)
+
+          # Result history is global: one authoritative result per scheduled day/round.
+          old_hist = '''  const historyRows = await db.gameRound.findMany({ where: { gameType: "color_game", lobbyId, status: { in: ["completed", "cancelled_insufficient_opposition"] }, startedAt: { lte: new Date() } }, orderBy: { startedAt: "desc" }, take: 100, select: { roundNumber: true, dailyRoundNumber: true, resultData: true, settledAt: true, startedAt: true, status: true } });\n  const history: Array<{ roundNumber: number; result: "red" | "blue"; voided: boolean; timestamp: string }> = [];\n  for (const r of historyRows) {\n    const data = r.resultData ? JSON.parse(r.resultData) : null;\n    if (data?.result === "red" || data?.result === "blue") history.push({ roundNumber: r.dailyRoundNumber ?? r.roundNumber, result: data.result, voided: r.status === "cancelled_insufficient_opposition" || data.voided === true, timestamp: (r.settledAt ?? r.startedAt).toISOString() });\n  }'''
+          new_hist = '''  const historyRows = await db.gameRound.findMany({ where: { gameType: "color_game", status: { in: ["completed", "cancelled_insufficient_opposition"] }, startedAt: { lte: new Date() } }, orderBy: { startedAt: "desc" }, take: 200, select: { id: true, roundNumber: true, dailyRoundNumber: true, resultData: true, settledAt: true, startedAt: true, status: true } });\n  const historyByRound = new Map<number, { roundNumber: number; result: "red" | "blue"; voided: boolean; timestamp: string }>();\n  for (const r of historyRows) {\n    const daily = r.dailyRoundNumber ?? r.roundNumber;\n    const data = r.resultData ? JSON.parse(r.resultData) : null;\n    if (!historyByRound.has(daily) && (data?.result === "red" || data?.result === "blue")) historyByRound.set(daily, { roundNumber: daily, result: data.result, voided: r.status === "cancelled_insufficient_opposition" || data.voided === true, timestamp: (r.settledAt ?? r.startedAt).toISOString() });\n  }\n  const history = [...historyByRound.values()].sort((a,b) => b.roundNumber - a.roundNumber).slice(0, 10);'''
+          if old_hist in s:
+              s = s.replace(old_hist, new_hist)
+
+          # Never report a finished round with an unsettled bet. This closes the
+          # race between the one-second game ticker and the one-second API poll.
+          old_phase = '''  if (state.dailyRoundNumber === schedule.dailyRoundNumber) { if (elapsed < WAITING_DURATION_MS) state.phase = "waiting"; else if (elapsed < WAITING_DURATION_MS + SPINNING_DURATION_MS) state.phase = "spinning"; else state.phase = "result"; }\n  const currentBets = await db.gameBet.findMany'''
+          new_phase = '''  if (state.dailyRoundNumber === schedule.dailyRoundNumber) {\n    if (elapsed < WAITING_DURATION_MS) state.phase = "waiting";\n    else if (elapsed < WAITING_DURATION_MS + SPINNING_DURATION_MS) state.phase = "spinning";\n    else {\n      state.phase = "result";\n      const unsettled = await db.gameBet.count({ where: { roundId: state.roundId, settled: false } });\n      if (unsettled > 0) await settleRound(lobbyId, state);\n      const settledRound = await db.gameRound.findUnique({ where: { id: state.roundId }, select: { status: true, resultData: true } });\n      state.voided = settledRound?.status === "cancelled_insufficient_opposition" || (settledRound?.resultData ? JSON.parse(settledRound.resultData).voided === true : false);\n    }\n  }\n  const currentBets = await db.gameBet.findMany'''
+          if old_phase in s:
+              s = s.replace(old_phase, new_phase)
+
+          p.write_text(s)
+          PY
+      - name: Commit changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/modules/games/colorGame/colorGame.service.ts
+          git diff --cached --quiet && exit 0
+          git commit -m "Fix Color Prediction global results and settlement timing"
+          git push
