@@ -1,0 +1,41 @@
+name: Apply global color fixes
+on:
+  push:
+    branches: [fix/color-global-results-stale-settlement]
+    paths:
+      - '.github/workflows/apply-global-color-fixes.yml'
+
+jobs:
+  patch:
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch color service
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/modules/games/colorGame/colorGame.service.ts')
+          s=p.read_text()
+          imp='import { getGlobalColorResult, recoverStaleColorRounds } from "./colorGame.global";\n'
+          if imp not in s:
+              s=s.replace('import { getLobbyPresenceCount } from "./colorGame.presence";\n', 'import { getLobbyPresenceCount } from "./colorGame.presence";\n'+imp)
+          old='''  const clientSeed = generateClientSeed(...sortedIds, state.roundId);\n  state.clientSeed = clientSeed;\n  state.result = deriveColorResult(state.serverSeed, clientSeed, state.roundNumber);\n  await db.gameRound.update({\n    where: { id: state.roundId },\n    data: { status: "spinning", clientSeed, nonce: state.roundNumber, resultData: JSON.stringify({ result: state.result }) },\n  });'''
+          new='''  const global = await getGlobalColorResult(state.dailyRoundNumber);\n  if (!global) throw new Error(`Global Color result unavailable for round ${state.dailyRoundNumber}`);\n  state.clientSeed = global.clientSeed;\n  state.result = global.result;\n  state.serverSeed = global.serverSeed;\n  state.serverSeedHash = hashServerSeed(global.serverSeed);\n  await db.gameRound.update({\n    where: { id: state.roundId },\n    data: { status: "spinning", clientSeed: global.clientSeed, serverSeed: global.serverSeed, serverSeedHash: state.serverSeedHash, nonce: state.dailyRoundNumber, resultData: JSON.stringify({ result: state.result }) },\n  });'''
+          if old not in s:
+              raise SystemExit('enterSpinning block not found')
+          s=s.replace(old,new)
+          marker='''export async function getLobbyState(lobbyId: string, userId?: string) {\n  const state = await ensureLobby(lobbyId);'''
+          repl='''export async function getLobbyState(lobbyId: string, userId?: string) {\n  await recoverStaleColorRounds();\n  const state = await ensureLobby(lobbyId);'''
+          if marker not in s:
+              raise SystemExit('getLobbyState marker not found')
+          s=s.replace(marker,repl)
+          p.write_text(s)
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/modules/games/colorGame/colorGame.service.ts
+          git commit -m 'Wire global color results and stale round recovery [skip ci]'
+          git push
