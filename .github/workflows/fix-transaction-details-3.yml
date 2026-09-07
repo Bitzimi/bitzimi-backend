@@ -1,63 +1,10 @@
-name: Fix transaction details verified
+name: Superseded transaction verification
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
 permissions:
-  contents: write
+  contents: read
 jobs:
-  patch:
-    if: "!contains(github.event.head_commit.message, '[transaction-details-fixed]')"
+  disabled:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Apply precise transaction metadata rules
-        shell: python
-        run: |
-          from pathlib import Path
-          p=Path('src/modules/transactions/transactions.service.ts')
-          s=p.read_text()
-
-          # Payment reference is real provider/blockchain data only. Never fall back to the internal DB id.
-          s=s.replace('referenceCode: w.txHash ?? w.id', 'referenceCode: w.txHash ?? null')
-          s=s.replace('referenceCode: d.txHash ?? d.id', 'referenceCode: d.txHash ?? null')
-
-          # Payment metadata gets a semantic reference kind; non-payment records never expose it.
-          s=s.replace('referenceCode: w.txHash ?? null }', 'referenceCode: w.txHash ?? null, referenceKind: w.paymentMethod === "crypto" ? "blockchain_hash" : "bank_reference" }')
-          s=s.replace('referenceCode: d.txHash ?? null, network:', 'referenceCode: d.txHash ?? null, referenceKind: d.paymentMethod === "crypto" ? "blockchain_hash" : "bank_reference", network:')
-
-          # Add source/destination labels after task proof hydration.
-          old='if (proof) metadata = { ...metadata, proofId: proof.id, taskId: proof.taskId, taskTitle: proof.task?.title, taskType: proof.task?.type, workerId: proof.userId, advertiserId: proof.task?.advertiserId, rewardAmount: proof.rewardAmount };'
-          new='if (proof) metadata = { ...metadata, proofId: proof.id, taskId: proof.taskId, taskTitle: proof.task?.title, taskType: proof.task?.type, workerId: proof.userId, advertiserId: proof.task?.advertiserId, rewardAmount: proof.rewardAmount, sourceLabel: proof.task?.title ? `Task: ${proof.task.title}` : "Completed Task", destinationLabel: raw.toWallet ? `${walletLabel(raw.toWallet)} Wallet` : "Task Wallet" };'
-          s=s.replace(old,new)
-
-          # Referral source/destination.
-          old='if (r) metadata = { ...metadata, referredUserId: r.referredId, referrerId: r.referrerId, rewardTrigger: "First VIP purchase" };'
-          new='if (r) metadata = { ...metadata, referredUserId: r.referredId, referrerId: r.referrerId, rewardTrigger: "First VIP purchase", sourceLabel: "Referral - First VIP purchase", destinationLabel: raw.toWallet ? `${walletLabel(raw.toWallet)} Wallet` : "Referral Wallet" };'
-          s=s.replace(old,new)
-
-          # VIP subscription/streak metadata and exact categories.
-          s=s.replace('if (raw.referenceType === "vip_subscription") { metadata = { ...metadata, subscriptionType: "VIP", subscriptionPlan: "Monthly", durationDays: 30, method: "Wallet", fromWallet: raw.fromWallet ?? "game" }; description = "VIP Subscription - Monthly"; }', 'if (raw.referenceType === "vip_subscription" || type === "vip_purchase") { type = "vip_purchase"; metadata = { ...metadata, subscriptionType: "VIP", subscriptionPlan: metadata.subscriptionPlan ?? "Monthly", durationDays: metadata.durationDays ?? 30, method: "Wallet", sourceLabel: `${walletLabel(raw.fromWallet ?? "game")} Wallet`, destinationLabel: "VIP Membership" }; description = `VIP Subscription - ${metadata.subscriptionPlan}`; }')
-          s=s.replace('if (raw.referenceType === "vip_streak") { metadata = { ...metadata, rewardType: "VIP Daily Streak Reward", streakDay: metadata.day ?? null, destinationWallet: raw.toWallet ?? "game" }; description = `VIP Daily Streak Reward${metadata.streakDay ? ` - Day ${metadata.streakDay}` : ""}`; }', 'if (raw.referenceType === "vip_streak" || type === "streak_reward") { type = "streak_reward"; metadata = { ...metadata, rewardType: "Daily Streak", streakDay: metadata.day ?? metadata.streakDay ?? null, sourceLabel: "Daily Streak", destinationLabel: `${walletLabel(raw.toWallet ?? "game")} Wallet`, month: metadata.month ?? (raw.createdAt ? new Date(raw.createdAt).toLocaleString("en-US", { month: "long", year: "numeric" }) : null) }; description = `Daily Streak Reward${metadata.streakDay ? ` - Day ${metadata.streakDay}` : ""}`; }')
-
-          # Game void detection uses actual void metadata or explicit legacy description; never a payment reference.
-          s=s.replace('if (type === "transfer" && /colour\\s+prediction.*void|color\\s+prediction.*void|colour\\s+game.*void|color\\s+game.*void/.test(lower)) type = "game_void";', 'if ((metadata.voided === true || metadata.voided === "true") || (type === "transfer" && /colour\\s+prediction.*void|color\\s+prediction.*void|colour\\s+game.*void|color\\s+game.*void/.test(lower))) type = "game_void";')
-
-          # Ensure payment reference fields cannot leak into non-payment metadata.
-          s=s.replace('  return { ...raw, type, description, metadata: Object.keys(metadata).length ? JSON.stringify(metadata) : null };', '  if (type !== "deposit" && type !== "withdrawal") { delete metadata.referenceCode; delete metadata.referenceKind; }\n  return { ...raw, type, description, metadata: Object.keys(metadata).length ? JSON.stringify(metadata) : null };')
-          p.write_text(s)
-
-          # Make the VIP creator use a dedicated transaction type and streak type.
-          p=Path('src/modules/vip/vip.service.ts')
-          s=p.read_text()
-          s=s.replace('userId, type: "transfer", fromWallet: "game", amount: vipPrice,', 'userId, type: "vip_purchase", fromWallet: "game", amount: vipPrice,')
-          s=s.replace('userId, type: "transfer", toWallet: "game", amount: rewardUSD,', 'userId, type: "streak_reward", toWallet: "game", amount: rewardUSD,')
-          p.write_text(s)
-      - name: Verify and commit
-        run: |
-          npm install
-          npm run build
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/modules/transactions/transactions.service.ts src/modules/vip/vip.service.ts
-          git diff --cached --quiet || git commit -m "Fix transaction-specific wallet history details [transaction-details-fixed]"
-          git push
+      - run: echo "Superseded; transaction history is maintained by the active audit workflow."
