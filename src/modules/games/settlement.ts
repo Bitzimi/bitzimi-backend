@@ -18,15 +18,13 @@ import { activateReferral } from "../referrals/referrals.service";
 
 export const PLATFORM_FEE_RATE = 0.10;
 
-// ── Upsert game stats ──────────────────────────────────────────────────────────
-
 export async function recordGameResult(opts: {
-  tx:          any;
-  userId:      string;
-  gameType:    string;
-  wagered:     number;
-  won:         boolean;
-  payout:      number;    // 0 on loss
+  tx: any;
+  userId: string;
+  gameType: string;
+  wagered: number;
+  won: boolean;
+  payout: number;
 }): Promise<void> {
   const { tx, userId, gameType, wagered, won, payout } = opts;
   await tx.gameStat.upsert({
@@ -46,8 +44,6 @@ export async function recordGameResult(opts: {
   });
 }
 
-// ── Settle a single-winner game result ────────────────────────────────────────
-
 export interface SingleWinnerResult {
   winnerId:    string;
   loserIds:    string[];
@@ -59,30 +55,19 @@ export interface SingleWinnerResult {
 }
 
 export async function settleSingleWinner(result: SingleWinnerResult): Promise<void> {
-  // platformFee is informational — the fee is implicit: winnerPayout = totalPool - platformFee
-  // Each game service calls triggerGameFeeCommission() separately using platformFee
   await db.$transaction(async (tx) => {
     await settleSingleWinnerInTx(tx, result);
   });
-
-  // Commission NOT fired here — each game service calls createGameFeeJobInTx()
-  // for all players (win OR loss) inside its own atomic transaction.
 }
 
-/**
- * Same logic as settleSingleWinner but operates on an already-open transaction client.
- * Use this when the caller needs wallet credit, ledger, and game stats to be part of
- * a larger atomic operation (e.g. SpinBattle: payout + round update + commission jobs).
- * Never opens a nested transaction — safe for Prisma's interactive transactions.
- */
 export async function settleSingleWinnerInTx(tx: any, result: SingleWinnerResult): Promise<void> {
-  const { winnerId, loserIds, totalPool, winnerPayout, gameType } = result;
+  const { winnerId, loserIds, totalPool, winnerPayout, gameType, roundId } = result;
 
   await creditWallet(tx, winnerId, "game", winnerPayout);
   await writeLedgerEntry(tx, {
     userId: winnerId, type: "game_win", toWallet: "game", amount: winnerPayout,
-    description: `${gameType} win`, referenceType: "game_round",
-    metadata: { gameType, totalPool },
+    description: `${gameType} win`, referenceId: roundId ?? null, referenceType: "game_round",
+    metadata: { gameType, totalPool, ...(roundId ? { roundId } : {}) },
   });
 
   const perPlayerStake = totalPool / (loserIds.length + 1);
@@ -92,8 +77,6 @@ export async function settleSingleWinnerInTx(tx: any, result: SingleWinnerResult
     await recordGameResult({ tx, userId: loserId, gameType, wagered: perPlayerStake, won: false, payout: 0 });
   }
 }
-
-// ── Settle a multi-winner game result (DiceArena: 1st + 2nd) ─────────────────
 
 export interface MultiWinnerResult {
   winners:  Array<{ userId: string; payout: number; placement: 1 | 2 }>;
@@ -106,7 +89,7 @@ export interface MultiWinnerResult {
 }
 
 export async function settleMultiWinner(result: MultiWinnerResult): Promise<void> {
-  const { winners, losers, perPlayerStake, gameType } = result;
+  const { winners, losers, perPlayerStake, gameType, roundId } = result;
 
   await db.$transaction(async (tx) => {
     for (const w of winners) {
@@ -114,7 +97,7 @@ export async function settleMultiWinner(result: MultiWinnerResult): Promise<void
       await writeLedgerEntry(tx, {
         userId: w.userId, type: "game_win", toWallet: "game", amount: w.payout,
         description: `${gameType} win — placement ${w.placement}`,
-        referenceType: "game_round", metadata: { gameType, placement: w.placement },
+        referenceId: roundId ?? null, referenceType: "game_round", metadata: { gameType, placement: w.placement, ...(roundId ? { roundId } : {}) },
       });
       await recordGameResult({ tx, userId: w.userId, gameType, wagered: perPlayerStake, won: true, payout: w.payout });
     }
@@ -122,15 +105,9 @@ export async function settleMultiWinner(result: MultiWinnerResult): Promise<void
       await recordGameResult({ tx, userId: l.userId, gameType, wagered: perPlayerStake, won: false, payout: 0 });
     }
   });
-
-  // Commission NOT fired here — each game service calls triggerGameFeeCommission()
-  // for all players (win OR loss) after this function returns.
 }
 
-// ── Activate referral on first game bet ───────────────────────────────────────
-
 export async function onGameBetPlaced(userId: string): Promise<void> {
-  // Fire-and-forget — activates referral if not already active
   setImmediate(() =>
     activateReferral(userId).catch(err => console.error("[Settlement] Referral activation error:", err))
   );
