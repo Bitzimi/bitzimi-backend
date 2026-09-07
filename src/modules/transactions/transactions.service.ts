@@ -73,6 +73,9 @@ async function hydrateTransaction(raw: any) {
     console.warn("[Transactions] detail hydration skipped:", err);
   }
 
+  if (type === "affiliate_commission") metadata = { ...metadata, sourceLabel: metadata.sourceLabel ?? `${walletLabel(metadata.eventType ?? "Activity")} commission`, destinationLabel: metadata.destinationLabel ?? `${walletLabel(raw.toWallet ?? "affiliate")} Wallet` };
+  if (type === "ambassador_commission") metadata = { ...metadata, sourceLabel: metadata.sourceLabel ?? `${walletLabel(metadata.eventType ?? "Activity")} reward`, destinationLabel: metadata.destinationLabel ?? `${walletLabel(raw.toWallet ?? "ambassador")} Wallet` };
+  if (type === "referral_bonus") metadata = { ...metadata, sourceLabel: metadata.sourceLabel ?? "Referral Reward", destinationLabel: metadata.destinationLabel ?? `${walletLabel(raw.toWallet ?? "referral")} Wallet` };
   const lower = String(description ?? "").toLowerCase();
   if ((metadata.voided === true || metadata.voided === "true") || (type === "transfer" && /colour\s+prediction.*void|color\s+prediction.*void|colour\s+game.*void|color\s+game.*void/.test(lower))) type = "game_void";
   if (type === "transfer" && raw.fromWallet && raw.toWallet) description = `Wallet Transfer - ${walletLabel(raw.fromWallet)} Wallet → ${walletLabel(raw.toWallet)} Wallet`;
