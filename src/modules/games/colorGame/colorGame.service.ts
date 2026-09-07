@@ -113,7 +113,7 @@ async function settleRound(lobbyId: string, state: LobbyState): Promise<void> {
     await db.$transaction(async tx => {
       for (const bet of bets) {
         await creditWallet(tx, bet.userId, "game", bet.amount);
-        await writeLedgerEntry(tx, { userId: bet.userId, type: "transfer", toWallet: "game", amount: bet.amount, description: "Color game void — full refund", referenceId: bet.id, referenceType: "game_bet", metadata: { gameType: "color_game", roundId: state.roundId, roundNumber: state.dailyRoundNumber, voided: true } });
+        await writeLedgerEntry(tx, { userId: bet.userId, type: "transfer", toWallet: "game", amount: bet.amount, description: `Color Prediction void — Lobby ${lobbyId}`, referenceId: bet.id, referenceType: "game_bet", metadata: { gameType: "color_game", lobby: lobbyId, roundId: state.roundId, roundNumber: state.dailyRoundNumber, voided: true } });
         await tx.gameBet.update({ where: { id: bet.id }, data: { outcome: "draw", payout: bet.amount, platformFee: 0, settled: true, settledAt: new Date() } });
         await tx.notification.create({ data: { userId: bet.userId, type: "game_void", title: "⚠️ Color Prediction Round Voided", message: `Round ${state.dailyRoundNumber} was voided because only one side had bets. Your ${bet.amount.toFixed(2)} stake was fully refunded.`, metadata: JSON.stringify({ game: "color_game", roundId: state.roundId, roundNumber: state.dailyRoundNumber, payout: bet.amount, voided: true }) } });
       }
@@ -132,10 +132,10 @@ async function settleRound(lobbyId: string, state: LobbyState): Promise<void> {
       const payout = isWinner ? parseFloat((bet.amount + (losingTotal - fee) * (bet.amount / winningTotal)).toFixed(8)) : 0;
       if (isWinner) {
         await creditWallet(tx, bet.userId, "game", payout);
-        await writeLedgerEntry(tx, { userId: bet.userId, type: "game_win", toWallet: "game", amount: payout, description: `Color game win — team ${winningTeam}`, referenceId: bet.id, referenceType: "game_bet", metadata: { team: winningTeam, roundId: state.roundId, roundNumber: state.dailyRoundNumber, stake: bet.amount, payout } });
+        await writeLedgerEntry(tx, { userId: bet.userId, type: "game_win", toWallet: "game", amount: payout, description: `Color Prediction win — Lobby ${lobbyId}`, referenceId: bet.id, referenceType: "game_bet", metadata: { gameType: "color_game", lobby: lobbyId, team: winningTeam, roundId: state.roundId, roundNumber: state.dailyRoundNumber, stake: bet.amount, payout } });
         await tx.notification.create({ data: { userId: bet.userId, type: "game_win", title: "🎉 Color Prediction Victory!", message: `You won ${payout.toFixed(2)} on ${winningTeam.toUpperCase()} in round ${state.dailyRoundNumber}.`, metadata: JSON.stringify({ game: "color_game", roundId: state.roundId, roundNumber: state.dailyRoundNumber, team: betTeam, winner: winningTeam, stake: bet.amount, payout }) } });
       } else {
-        await writeLedgerEntry(tx, { userId: bet.userId, type: "game_loss", fromWallet: "game", amount: bet.amount, description: `Color game loss — team ${betTeam}`, referenceId: bet.id, referenceType: "game_bet", metadata: { team: betTeam, winner: winningTeam, roundId: state.roundId, roundNumber: state.dailyRoundNumber, stake: bet.amount, payout: 0 } });
+        await writeLedgerEntry(tx, { userId: bet.userId, type: "game_loss", fromWallet: "game", amount: bet.amount, description: `Color Prediction loss — Lobby ${lobbyId}`, referenceId: bet.id, referenceType: "game_bet", metadata: { gameType: "color_game", lobby: lobbyId, team: betTeam, winner: winningTeam, roundId: state.roundId, roundNumber: state.dailyRoundNumber, stake: bet.amount, payout: 0 } });
         await tx.notification.create({ data: { userId: bet.userId, type: "game_loss", title: "Color Prediction Result", message: `You lost ${bet.amount.toFixed(2)} on ${betTeam.toUpperCase()} in round ${state.dailyRoundNumber}.`, metadata: JSON.stringify({ game: "color_game", roundId: state.roundId, roundNumber: state.dailyRoundNumber, team: betTeam, winner: winningTeam, stake: bet.amount, payout: 0 }) } });
       }
       const userFee = bet.amount * feeRate;
@@ -146,14 +146,33 @@ async function settleRound(lobbyId: string, state: LobbyState): Promise<void> {
   });
 }
 
+async function getGlobalColorFairnessSeed(dailyRoundNumber: number, fallbackSeed: string): Promise<string> {
+  return db.$transaction(async tx => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`color-global:${dailyRoundNumber}`}))`;
+    const canonical = await tx.gameRound.findFirst({
+      where: { gameType: "color_game", dailyRoundNumber, serverSeed: { not: null } },
+      orderBy: { startedAt: "asc" },
+      select: { serverSeed: true },
+    });
+    const seed = canonical?.serverSeed ?? fallbackSeed;
+    await tx.gameRound.updateMany({
+      where: { gameType: "color_game", dailyRoundNumber, status: { in: ["waiting", "spinning", "result"] } },
+      data: { serverSeed: seed, serverSeedHash: hashServerSeed(seed) },
+    });
+    return seed;
+  });
+}
+
 async function enterSpinning(lobbyId: string, state: LobbyState): Promise<void> {
   if (state.phase !== "waiting") return;
   state.phase = "spinning"; state.phaseStartedAt = Date.now();
-  const bettors = await db.gameBet.findMany({ where: { roundId: state.roundId }, select: { userId: true } });
-  const sortedIds = [...new Set(bettors.map(b => String(b.userId)))].sort();
-  const clientSeed: string = String(generateClientSeed(...sortedIds, String(state.roundId)));
-  const result = deriveColorResult(String(state.serverSeed), clientSeed, Number(state.dailyRoundNumber));
-  state.clientSeed = clientSeed; state.result = result; state.serverSeedHash = hashServerSeed(String(state.serverSeed));
+  const globalServerSeed = await getGlobalColorFairnessSeed(state.dailyRoundNumber, String(state.serverSeed));
+  const clientSeed: string = `color-global-${state.dailyRoundNumber}`;
+  const result = deriveColorResult(globalServerSeed, clientSeed, Number(state.dailyRoundNumber));
+  state.serverSeed = globalServerSeed;
+  state.clientSeed = clientSeed;
+  state.result = result;
+  state.serverSeedHash = hashServerSeed(globalServerSeed);
   await db.gameRound.update({ where: { id: state.roundId }, data: { status: "spinning", clientSeed, serverSeed: state.serverSeed, serverSeedHash: state.serverSeedHash, nonce: state.dailyRoundNumber, resultData: JSON.stringify({ result }) } });
 }
 
@@ -219,23 +238,35 @@ export async function getLobbyState(lobbyId: string, userId?: string) {
   const schedule = getGlobalRound();
   const elapsed = Math.max(0, Date.now() - schedule.startMs);
   const cfg = LOBBY_CONFIG[lobbyId];
-  if (state.dailyRoundNumber === schedule.dailyRoundNumber) { if (elapsed < WAITING_DURATION_MS) state.phase = "waiting"; else if (elapsed < WAITING_DURATION_MS + SPINNING_DURATION_MS) state.phase = "spinning"; else state.phase = "result"; }
+  if (state.dailyRoundNumber === schedule.dailyRoundNumber) {
+    if (elapsed < WAITING_DURATION_MS) state.phase = "waiting";
+    else if (elapsed < WAITING_DURATION_MS + SPINNING_DURATION_MS) state.phase = "spinning";
+    else {
+      state.phase = "result";
+      const unsettled = await db.gameBet.count({ where: { roundId: state.roundId, settled: false } });
+      if (unsettled > 0) await settleRound(lobbyId, state);
+      const settledRound = await db.gameRound.findUnique({ where: { id: state.roundId }, select: { status: true, resultData: true } });
+      state.voided = settledRound?.status === "cancelled_insufficient_opposition" || (settledRound?.resultData ? JSON.parse(settledRound.resultData).voided === true : false);
+    }
+  }
   const currentBets = await db.gameBet.findMany({ where: { roundId: state.roundId }, include: { user: { include: { profile: { select: { username: true } } } } }, orderBy: { placedAt: "desc" }, take: 40 });
   const redBets = currentBets.filter(b => parseTeam(b.betData) === "red"), blueBets = currentBets.filter(b => parseTeam(b.betData) === "blue");
   let myBet: { team: string; amount: number; outcome: string | null; payout: number | null } | null = null;
   if (userId) { const bet = currentBets.find(b => b.userId === userId); if (bet) myBet = { team: parseTeam(bet.betData), amount: bet.amount, outcome: bet.outcome, payout: bet.payout ?? null }; }
-  const historyRows = await db.gameRound.findMany({ where: { gameType: "color_game", lobbyId, status: { in: ["completed", "cancelled_insufficient_opposition"] }, startedAt: { lte: new Date() } }, orderBy: { startedAt: "desc" }, take: 100, select: { roundNumber: true, dailyRoundNumber: true, resultData: true, settledAt: true, startedAt: true, status: true } });
-  const history: Array<{ roundNumber: number; result: "red" | "blue"; voided: boolean; timestamp: string }> = [];
-  const seenRoundNumbers = new Set<number>();
+  const historyRows = await db.gameRound.findMany({
+    where: { gameType: "color_game", status: { in: ["completed", "cancelled_insufficient_opposition"] }, startedAt: { lte: new Date() } },
+    orderBy: { startedAt: "desc" }, take: 200,
+    select: { id: true, roundNumber: true, dailyRoundNumber: true, resultData: true, settledAt: true, startedAt: true, status: true },
+  });
+  const historyByRound = new Map<number, { roundNumber: number; result: "red" | "blue"; voided: boolean; timestamp: string }>();
   for (const r of historyRows) {
-    const data = r.resultData ? JSON.parse(r.resultData) : null;
     const roundNumber = r.dailyRoundNumber ?? r.roundNumber;
-    const result = data?.result;
-    if ((result !== "red" && result !== "blue") || seenRoundNumbers.has(roundNumber)) continue;
-    seenRoundNumbers.add(roundNumber);
-    history.push({ roundNumber, result, voided: r.status === "cancelled_insufficient_opposition" || data?.voided === true, timestamp: r.settledAt?.toISOString() ?? r.startedAt.toISOString() });
-    if (history.length === 10) break;
+    const data = r.resultData ? JSON.parse(r.resultData) : null;
+    if (!historyByRound.has(roundNumber) && (data?.result === "red" || data?.result === "blue")) {
+      historyByRound.set(roundNumber, { roundNumber, result: data.result, voided: r.status === "cancelled_insufficient_opposition" || data.voided === true, timestamp: r.settledAt?.toISOString() ?? r.startedAt.toISOString() });
+    }
   }
+  const history = [...historyByRound.values()].sort((a, b) => b.roundNumber - a.roundNumber).slice(0, 10);
   const historyRoundRows = userId ? await db.gameRound.findMany({ where: { gameType: "color_game", lobbyId }, orderBy: { startedAt: "desc" }, take: 50, select: { id: true, roundNumber: true, dailyRoundNumber: true } }) : [];
   const historyRoundNumbers = new Map(historyRoundRows.map(r => [r.id, r.dailyRoundNumber ?? r.roundNumber]));
   const personalBets = userId && historyRoundRows.length ? await db.gameBet.findMany({ where: { userId, roundId: { in: historyRoundRows.map(r => r.id) } }, orderBy: { placedAt: "desc" }, take: 50 }) : [];
