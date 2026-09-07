@@ -1,6 +1,6 @@
 # BitZimi — Master Completion Roadmap v2
 
-**Updated:** 2026-09-06  
+**Updated:** 2026-09-07  
 **Source of truth:** `audit report.md` — expanded full frontend/backend code audit dated 2026-09-06, plus confirmed BitZimi business/payment requirements.
 
 This is the existing master roadmap. No second roadmap has been created.
@@ -147,6 +147,12 @@ This is the existing master roadmap. No second roadmap has been created.
 - [✓] **Additional requirement discovered during Phase 2 verification:** Coin Flip, Dice Clash and Reaction Tap settlements now record explicit winner/loss wallet-history entries and backend-authoritative win/loss notifications atomically with settlement.
 - [✓] **Additional requirement discovered during Phase 2 verification:** frontend wallet history preserves `game_bet` correctly and consumes backend `game_loss`; legacy optimistic game notifications are deduplicated against backend settlement notifications.
 - [✓] **Additional requirement discovered during Phase 2 verification:** final backend build/typecheck and Render production deployment were re-verified after the above fixes; frontend production deployments for the corresponding transaction/notification changes reached Vercel `READY`.
+- [✓] **Additional requirement discovered during Phase 2 verification:** Colour Prediction publishes the authoritative winner at the start of the 6-second `SPINNING` phase so the frontend wheel can animate for the full 6 seconds before the `RESULT` phase.
+- [✓] **Additional requirement discovered during Phase 2 verification:** Colour Prediction personal bet history is now backend-derived across rounds, replacing the frontend-only `betService` history path; placement, win, loss and refund states are retained after reload.
+- [✓] **Additional requirement discovered during Phase 2 verification:** Colour Prediction normal settlements now create explicit `game_loss` ledger entries and backend win/loss notifications atomically; voided-round participants receive a backend void/refund notification.
+- [✓] **Additional requirement discovered during Phase 2 verification:** the Colour Prediction void/refund popup is participant-only; spectators retain the existing non-participant popup, and result popups auto-close after 5 seconds without changing the other popup designs.
+- [✓] **Additional requirement discovered during Phase 2 verification:** Colour Prediction's closing warning now begins at 15 seconds; `Bet Closed` appears only when the backend enters `SPINNING` at zero, and wallet/transaction/notification state is refreshed from backend settlement.
+- [✓] **Verification:** backend `npm run build`/TypeScript compilation passed on Render for commit `9dc12bf0cba200d0c87e7ea32774a7260a28b913`, Prisma reported no pending migrations, Render marked the deployment `LIVE`, and the corresponding frontend Vercel deployment for commit `9fc1da58f3784a01e198de71ff388ccf96e39e66` reached `READY`.
 
 # Phase 3 — Football AI [ ]
 - [ ] Backend-authoritative VIP entitlement; client/query `isVip` cannot grant access.
