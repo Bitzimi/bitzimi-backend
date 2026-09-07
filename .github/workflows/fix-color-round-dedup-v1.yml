@@ -1,0 +1,37 @@
+name: Fix Color Round Dedup V1
+on:
+  push:
+    paths: ['.github/workflows/fix-color-round-dedup-v1.yml']
+  workflow_dispatch:
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    permissions: { contents: write }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: npm install
+      - name: Apply and verify
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+          p=Path('src/modules/games/colorGame/colorGame.service.ts')
+          s=p.read_text()
+          start=s.index('async function createScheduledRound(')
+          end=s.index('\nasync function ensureLobby',start)
+          replacement='''async function createScheduledRound(lobbyId: string, dailyRoundNumber: number, startMs: number): Promise<LobbyState> {\n  const round = await db.$transaction(async tx => {\n    // One logical round per lobby per scheduled slot. The schedule is global,\n    // but the round row/result/seed is always owned by this lobby.\n    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`color-lobby:${lobbyId}`}))`;\n    const existing = await tx.gameRound.findFirst({\n      where: { gameType: "color_game", lobbyId, dailyRoundNumber, status: { in: ["waiting", "spinning", "result"] } },\n      orderBy: { startedAt: "desc" },\n    });\n    if (existing) return existing;\n    const last = await tx.gameRound.findFirst({ where: { gameType: "color_game", lobbyId }, orderBy: { roundNumber: "desc" }, select: { roundNumber: true } });\n    const roundNumber = (last?.roundNumber ?? 0) + 1;\n    const serverSeed = generateServerSeed();\n    const serverSeedHash = hashServerSeed(serverSeed);\n    return tx.gameRound.create({ data: { gameType: "color_game", lobbyId, roundNumber, status: "waiting", startedAt: new Date(startMs), serverSeed, serverSeedHash, dailyRoundNumber, verificationId: generateVerificationId("color_game") } });\n  });\n  const savedSeed = round.serverSeed ?? generateServerSeed();\n  const state: LobbyState = { roundId: round.id, roundNumber: round.roundNumber, dailyRoundNumber, phase: round.status as LobbyState["phase"], phaseStartedAt: startMs, result: round.resultData ? JSON.parse(round.resultData).result ?? null : null, redTotal: 0, blueTotal: 0, voided: false, serverSeed: savedSeed, serverSeedHash: round.serverSeedHash ?? hashServerSeed(savedSeed), clientSeed: round.clientSeed ?? null };\n  lobbyStates.set(lobbyId, state);\n  return state;\n}\n'''
+          s=s[:start]+replacement+s[end:]
+          old='''  const historyRows = await db.gameRound.findMany({ where: { gameType: "color_game", lobbyId, status: { in: ["completed", "cancelled_insufficient_opposition"] } }, orderBy: { startedAt: "desc" }, take: 10, select: { roundNumber: true, dailyRoundNumber: true, resultData: true, settledAt: true, startedAt: true, status: true } });\n  const history = historyRows.map(r => { const data = r.resultData ? JSON.parse(r.resultData) : null; return { roundNumber: r.dailyRoundNumber ?? r.roundNumber, result: data?.result ?? null, voided: r.status === "cancelled_insufficient_opposition" || data?.voided === true, timestamp: r.settledAt?.toISOString() ?? r.startedAt.toISOString() }; }).filter(r => r.result !== null);'''
+          new='''  const historyRows = await db.gameRound.findMany({ where: { gameType: "color_game", lobbyId, status: { in: ["completed", "cancelled_insufficient_opposition"] }, startedAt: { lte: new Date() } }, orderBy: { startedAt: "desc" }, take: 100, select: { roundNumber: true, dailyRoundNumber: true, resultData: true, settledAt: true, startedAt: true, status: true } });\n  const history: Array<{ roundNumber: number; result: "red" | "blue"; voided: boolean; timestamp: string }> = [];\n  const seenRoundNumbers = new Set<number>();\n  for (const r of historyRows) {\n    const data = r.resultData ? JSON.parse(r.resultData) : null;\n    const roundNumber = r.dailyRoundNumber ?? r.roundNumber;\n    const result = data?.result;\n    if ((result !== "red" && result !== "blue") || seenRoundNumbers.has(roundNumber)) continue;\n    seenRoundNumbers.add(roundNumber);\n    history.push({ roundNumber, result, voided: r.status === "cancelled_insufficient_opposition" || data?.voided === true, timestamp: r.settledAt?.toISOString() ?? r.startedAt.toISOString() });\n    if (history.length === 10) break;\n  }'''
+          if old not in s: raise SystemExit('history block not found')
+          s=s.replace(old,new,1)
+          p.write_text(s)
+          PY
+          npm run build
+          git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm -f .github/workflows/fix-color-round-dedup-v1.yml
+          git add src/modules/games/colorGame/colorGame.service.ts
+          git commit -m 'Harden Color Prediction round uniqueness and history'
+          git push
