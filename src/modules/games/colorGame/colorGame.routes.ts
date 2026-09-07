@@ -2,29 +2,58 @@ import { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { authenticate } from "../../../middleware/authenticate";
 import { getAllLobbyStates, getLobbyState, placeBet } from "./colorGame.service";
+import { leaveLobbyPresence, touchLobbyPresence } from "./colorGame.presence";
+
+const ROUND_MS = 90_000;
+const ROUND_TIME_ZONE = "Africa/Lagos";
+
+function scheduledDailyRound(timestamp: string): number {
+  const date = new Date(timestamp);
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: ROUND_TIME_ZONE,
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(date).filter(p => p.type !== "literal").map(p => [p.type, p.value]),
+  );
+  const seconds = Number(parts.hour) * 3600 + Number(parts.minute) * 60 + Number(parts.second) + date.getMilliseconds() / 1000;
+  return Math.floor(seconds * 1000 / ROUND_MS) + 1;
+}
 
 export async function colorGameRoutes(app: FastifyInstance) {
   app.addHook("onRequest", authenticate);
 
-  // GET /api/v1/games/color/lobbies — all lobby states (for lobby selection UI)
   app.get("/lobbies", async (_req, reply) => {
     return reply.send({ data: await getAllLobbyStates() });
   });
 
-  // GET /api/v1/games/color/lobbies/:lobby — single lobby state (clients poll this)
-  // Returns enriched state including player counts, round history, current bets, and
-  // the authenticated user's own bet for the current round (including payout once settled).
   app.get("/lobbies/:lobby", async (req, reply) => {
     const { lobby } = req.params as { lobby: string };
-    return reply.send({ data: await getLobbyState(lobby.toUpperCase(), req.user.sub) });
+    const data = await getLobbyState(lobby.toUpperCase(), req.user.sub);
+    data.history = data.history.map((h: any) => ({ ...h, roundNumber: scheduledDailyRound(h.timestamp) }));
+    data.myBetHistory = data.myBetHistory.map((b: any) => ({ ...b, roundNumber: scheduledDailyRound(b.timestamp) }));
+    return reply.send({ data });
   });
 
-  // POST /api/v1/games/color/bets — place a bet in an active lobby round
+  app.post("/lobbies/:lobby/presence", async (req, reply) => {
+    const { lobby } = req.params as { lobby: string };
+    const count = await touchLobbyPresence(req.user.sub, lobby);
+    return reply.send({ data: { lobbyId: lobby.toUpperCase(), playerCount: count } });
+  });
+
+  app.delete("/lobbies/:lobby/presence", async (req, reply) => {
+    const { lobby } = req.params as { lobby: string };
+    await leaveLobbyPresence(req.user.sub, lobby);
+    return reply.status(204).send();
+  });
+
   app.post("/bets", async (req, reply) => {
     const body = z.object({
       lobbyId: z.enum(["A", "B", "C", "D"]),
-      team:    z.enum(["red", "blue"]),
-      amount:  z.number().positive(),
+      team: z.enum(["red", "blue"]),
+      amount: z.number().positive(),
     }).parse(req.body);
     const data = await placeBet(req.user.sub, body.lobbyId, body.team, body.amount);
     return reply.status(201).send({ data });
