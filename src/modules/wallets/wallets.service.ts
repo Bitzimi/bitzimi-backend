@@ -93,6 +93,21 @@ export async function writeLedgerEntry(tx: any, entry: {
 }): Promise<void> {
   const fee       = entry.fee ?? 0;
   const netAmount = parseFloat((entry.amount - fee).toFixed(8));
+  let metadata = entry.metadata ? { ...entry.metadata } : {};
+  if (entry.referenceType === "game_bet" && entry.referenceId) {
+    const bet = await tx.gameBet.findUnique({
+      where: { id: entry.referenceId },
+      select: { amount: true, round: { select: { gameType: true, lobbyId: true } } },
+    });
+    if (bet) {
+      metadata = {
+        gameType: bet.round.gameType,
+        stake: bet.amount,
+        ...(bet.round.lobbyId ? { lobby: bet.round.lobbyId } : {}),
+        ...metadata,
+      };
+    }
+  }
   await tx.transaction.create({
     data: {
       userId:        entry.userId,
@@ -106,7 +121,7 @@ export async function writeLedgerEntry(tx: any, entry: {
       description:   entry.description,
       referenceId:   entry.referenceId   ?? null,
       referenceType: entry.referenceType ?? null,
-      metadata:      entry.metadata ? JSON.stringify(entry.metadata) : null,
+      metadata:      Object.keys(metadata).length ? JSON.stringify(metadata) : null,
     },
   });
 }
