@@ -1,0 +1,124 @@
+name: Fix transaction hydration
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: "!contains(github.event.head_commit.message, '[transaction-details-fixed]')"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch transaction hydration
+        shell: python
+        run: |
+          from pathlib import Path
+          p=Path('src/modules/transactions/transactions.service.ts')
+          s=p.read_text()
+          start=s.index('  const lower = String(description ?? "").toLowerCase();')
+          end=s.index('\n  return { ...raw, type, description, metadata:', start)
+          new=r'''  const lower = String(description ?? "").toLowerCase();
+
+  // Legacy Colour Prediction refunds were stored as transfers. Present them as
+  // Game Void while keeping the underlying ledger reference intact.
+  const isColorVoid = (metadata.voided === true || metadata.voided === "true") &&
+    String(metadata.gameType ?? metadata.game ?? "").toLowerCase().includes("color");
+  if (isColorVoid) type = "game_void";
+
+  // Real wallet-to-wallet transfers expose From and To only.
+  if (type === "transfer" && raw.fromWallet && raw.toWallet) {
+    description = `Wallet Transfer - ${walletLabel(raw.fromWallet)} Wallet → ${walletLabel(raw.toWallet)} Wallet`;
+  }
+
+  // Deposits and withdrawals are the ONLY transaction categories with a payment
+  // Reference ID. For crypto this is the real blockchain tx hash; for bank it is
+  // the real bank/payment-provider reference. Never use the internal ledger UUID.
+  if (type === "withdrawal" || raw.referenceType === "withdrawal") {
+    type = "withdrawal";
+    description = `Withdrawal - ${walletLabel(metadata.method ?? "")}`.replace(/- $/, "Withdrawal");
+    metadata.sourceLabel = metadata.fromWallet ? `${walletLabel(metadata.fromWallet)} Wallet` : undefined;
+    metadata.referenceCode = metadata.txHash ?? null;
+    metadata.referenceKind = metadata.method === "crypto" ? "blockchain_hash" : "bank_reference";
+  }
+  if (type === "deposit" || raw.referenceType === "deposit") {
+    type = "deposit";
+    description = `${walletLabel(metadata.method ?? "Deposit")} Deposit`;
+    metadata.destinationLabel = raw.toWallet ? `${walletLabel(raw.toWallet)} Wallet` : "Game Wallet";
+    metadata.referenceCode = metadata.txHash ?? null;
+    metadata.referenceKind = metadata.method === "crypto" ? "blockchain_hash" : "bank_reference";
+  }
+
+  // VIP subscription is a service purchase, not a generic transfer.
+  if (raw.referenceType === "vip_subscription" || type === "vip_purchase") {
+    type = "vip_purchase";
+    metadata = { ...metadata, subscriptionType: "VIP", subscriptionPlan: metadata.subscriptionPlan ?? "Monthly", durationDays: metadata.durationDays ?? 30, method: "Wallet", sourceLabel: metadata.fromWallet ? `${walletLabel(metadata.fromWallet)} Wallet` : "Game Wallet", destinationLabel: "VIP Membership" };
+    description = `VIP Subscription - ${metadata.subscriptionPlan}`;
+  }
+
+  // Daily streak is its own reward category. No Date/Time field is duplicated in metadata.
+  if (raw.referenceType === "vip_streak" || type === "streak_reward") {
+    type = "streak_reward";
+    metadata = { ...metadata, rewardType: "Daily Streak", streakDay: metadata.day ?? metadata.streakDay ?? null, sourceLabel: "Daily Streak", destinationLabel: raw.toWallet ? `${walletLabel(raw.toWallet)} Wallet` : "Game Wallet", month: metadata.month ?? (raw.createdAt ? new Date(raw.createdAt).toLocaleString("en-US", { month: "long", year: "numeric" }) : null) };
+    description = `Daily Streak Reward${metadata.streakDay ? ` - Day ${metadata.streakDay}` : ""}`;
+  }
+
+  if (type === "task_reward") {
+    metadata.sourceLabel = metadata.taskTitle ? `Task: ${metadata.taskTitle}` : "Completed Task";
+    metadata.destinationLabel = raw.toWallet ? `${walletLabel(raw.toWallet)} Wallet` : "Task Wallet";
+    description = `Task Reward${metadata.taskTitle ? ` - ${metadata.taskTitle}` : ""}`;
+  }
+  if (type === "referral_bonus") {
+    metadata.sourceLabel = metadata.rewardTrigger ? `Referral - ${metadata.rewardTrigger}` : "Referral Reward";
+    metadata.destinationLabel = raw.toWallet ? `${walletLabel(raw.toWallet)} Wallet` : "Referral Wallet";
+    description = `Referral Bonus${metadata.rewardTrigger ? ` - ${metadata.rewardTrigger}` : ""}`;
+  }
+  if (type === "affiliate_commission") {
+    metadata.sourceLabel = `${walletLabel(metadata.eventType ?? "affiliate")} Commission`;
+    metadata.destinationLabel = raw.toWallet ? `${walletLabel(raw.toWallet)} Wallet` : "Affiliate Wallet";
+    description = `Affiliate Commission${metadata.tier ? ` - Tier ${metadata.tier}` : ""}${metadata.eventType ? ` - ${walletLabel(metadata.eventType)}` : ""}`;
+  }
+  if (type === "ambassador_commission") {
+    metadata.sourceLabel = `${walletLabel(metadata.eventType ?? "ambassador")} Commission`;
+    metadata.destinationLabel = raw.toWallet ? `${walletLabel(raw.toWallet)} Wallet` : "Ambassador Wallet";
+    description = `Ambassador Reward${metadata.tier ? ` - Tier ${metadata.tier}` : ""}${metadata.eventType ? ` - ${walletLabel(metadata.eventType)}` : ""}`;
+  }
+  if (type === "challenge_reward") {
+    metadata.sourceLabel = metadata.challengeTitle ? `Monthly Challenge: ${metadata.challengeTitle}` : "Monthly Challenge";
+    metadata.destinationLabel = raw.toWallet ? `${walletLabel(raw.toWallet)} Wallet` : (metadata.level ? `${walletLabel(metadata.level)} Wallet` : undefined);
+    description = `Monthly Challenge Reward${metadata.level ? ` - ${walletLabel(metadata.level)}` : ""}${metadata.rank ? ` - Rank ${metadata.rank}` : ""}`;
+  }
+  if (type === "vip_grant") {
+    metadata.sourceLabel = metadata.challengeTitle ? `Monthly Challenge: ${metadata.challengeTitle}` : "Admin VIP Grant";
+    description = `VIP Grant - ${metadata.durationDays ?? 0} days${metadata.reason ? ` - ${metadata.reason}` : ""}`;
+  }
+
+  // Game records are game-specific only. Reference IDs are never payment references.
+  if (type.startsWith("game_") && metadata.gameType) {
+    const action = type === "game_win" ? "Win" : type === "game_loss" ? "Loss" : type === "game_bet" ? "Bet" : "Void";
+    const lobby = metadata.lobby ?? metadata.lobbyName ?? metadata.lobbyId;
+    const stake = metadata.stakeRoom ?? metadata.stake ?? metadata.stakeAmount ?? metadata.roomStake;
+    const context = lobby != null && String(lobby).trim() !== ""
+      ? `Lobby ${String(lobby).replace(/^Lobby\s*/i, "")}`
+      : stake != null && String(stake).trim() !== ""
+        ? `Stake Room $${Number(stake).toLocaleString()}` : "";
+    description = `${gameLabel(metadata.gameType)} ${action}${context ? ` - ${context}` : ""}`;
+  }
+
+  // Internal ledger references remain available to the backend but never become
+  // a user-facing Reference ID for non-payment transactions.
+  if (type !== "deposit" && type !== "withdrawal") {
+    delete metadata.referenceCode;
+    delete metadata.referenceKind;
+    delete metadata.txHash;
+  }'''
+          p.write_text(s[:start]+new+s[end:])
+      - name: Verify and commit
+        run: |
+          npm ci
+          npm run build
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/modules/transactions/transactions.service.ts
+          git diff --cached --quiet || git commit -m "Fix transaction-specific wallet history details [transaction-details-fixed]"
+          git push
