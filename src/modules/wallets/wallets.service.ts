@@ -59,12 +59,8 @@ export async function writeLedgerEntry(tx: any, entry: {
   const netAmount = parseFloat((entry.amount - fee).toFixed(8));
   let metadata = entry.metadata ? { ...entry.metadata } : {};
 
-  // Every ledger row carries explicit context so the wallet history never has to
-  // infer meaning from the amount or a generic description.
   if (entry.fromWallet) metadata.fromWallet = entry.fromWallet;
   if (entry.toWallet) metadata.toWallet = entry.toWallet;
-  if (entry.referenceId) metadata.referenceRecordId = entry.referenceId;
-  if (entry.referenceType) metadata.referenceRecordType = entry.referenceType;
 
   try {
     if (entry.referenceType === "task" && entry.referenceId) {
@@ -109,7 +105,6 @@ export async function writeLedgerEntry(tx: any, entry: {
     if (bet) metadata = { gameType: bet.round.gameType, stake: bet.amount, stakeRoom: bet.amount, roundId: bet.round.id, roundNumber: bet.round.roundNumber, ...(bet.round.lobbyId ? { lobby: bet.round.lobbyId } : {}), ...metadata };
   }
 
-  // PVP rows are enriched from the authoritative match record.
   let description = entry.description;
   const walletName = (value: any) => String(value ?? "").replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
   if (entry.type === "transfer" && entry.fromWallet && entry.toWallet) description = `Wallet Transfer - ${walletName(entry.fromWallet)} Wallet → ${walletName(entry.toWallet)} Wallet`;
@@ -143,8 +138,6 @@ export async function writeLedgerEntry(tx: any, entry: {
     }
   }
 
-  // Legacy Colour Prediction void rows were incorrectly typed as transfers.
-  // Normalize them here as game_void while keeping the original database row intact.
   let ledgerType = entry.type;
   if (ledgerType === "transfer" && /colour\s+(prediction|game).*void|color\s+(prediction|game).*void/i.test(entry.description)) ledgerType = "game_void";
 
