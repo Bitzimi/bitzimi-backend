@@ -24,7 +24,6 @@ jobs:
               s = s.replace('  if (raw.referenceId) metadata.referenceRecordId = raw.referenceId;\n', '')
               s = s.replace('  if (raw.referenceType) metadata.referenceRecordType = raw.referenceType;\n', '')
               s = s.replace('month: metadata.month ?? (raw.createdAt ? new Date(raw.createdAt).toLocaleString("en-US", { month: "long", year: "numeric" }) : null)', 'month: undefined')
-              s = s.replace('month: metadata.month ?? (raw.createdAt ? new Date(raw.createdAt).toLocaleString("en-US", { month: "long", year: "numeric" }) : null), ', '')
               p.write_text(s)
 
           # A Colour Prediction refund is a Game Void, never a generic Transfer.
@@ -55,7 +54,7 @@ jobs:
           p.write_text(s)
       - name: Verify and commit
         run: |
-          npm ci
+          npm install
           npm run build
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
