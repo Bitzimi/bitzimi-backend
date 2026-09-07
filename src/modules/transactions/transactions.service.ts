@@ -100,6 +100,7 @@ async function hydrateTransaction(raw: any) {
   }
 
   if (type !== "deposit" && type !== "withdrawal") { delete metadata.referenceCode; delete metadata.referenceKind; }
+  if (type !== "deposit" && type !== "withdrawal") { delete metadata.referenceCode; delete metadata.referenceKind; }
   return { ...raw, type, description, metadata: Object.keys(metadata).length ? JSON.stringify(metadata) : null };
 }
 
