@@ -1,51 +1,10 @@
-name: Fix transaction details
+name: Superseded transaction patch
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
 permissions:
-  contents: write
+  contents: read
 jobs:
-  patch:
-    if: "!contains(github.event.head_commit.message, '[transaction-details-fixed]')"
+  disabled:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Apply transaction-specific metadata fixes
-        shell: python
-        run: |
-          from pathlib import Path
-
-          # VIP purchase is a purchase, not a wallet transfer.
-          p=Path('src/modules/vip/vip.service.ts')
-          s=p.read_text()
-          s=s.replace('userId, type: "transfer", fromWallet: "game", amount: vipPrice,', 'userId, type: "vip_purchase", fromWallet: "game", amount: vipPrice,')
-          s=s.replace('userId, type: "transfer", toWallet: "game", amount: rewardUSD,\n      description: `VIP daily streak reward — day ${newStreak}`,\n      referenceType: "vip_streak", metadata: { day: newStreak },', 'userId, type: "streak_reward", toWallet: "game", amount: rewardUSD,\n      description: `VIP daily streak reward — day ${newStreak}`,\n      referenceType: "vip_streak", metadata: { day: newStreak, sourceLabel: "Daily Streak", destinationLabel: "Game Wallet", month: new Date().toLocaleString("en-US", { month: "long", year: "numeric" }) },')
-          p.write_text(s)
-
-          # Give every commission record its real source category and destination wallet.
-          p=Path('src/modules/affiliates/commissions.ts')
-          s=p.read_text()
-          s=s.replace('metadata: { tier, eventType, sourceUserId, rate, programLevel: node.programLevel },', 'metadata: { tier, eventType, sourceUserId, rate, programLevel: node.programLevel, sourceLabel: `${eventType} commission`, destinationLabel: `${walletType} Wallet` },')
-          p.write_text(s)
-
-          # Task reward records identify the task source and receiving wallet.
-          p=Path('src/modules/tasks/proofs.service.ts')
-          s=p.read_text()
-          s=s.replace('metadata: { taskId: proof.taskId } });\n        if ((proof.rewardAmount ?? 0) > 0)', 'metadata: { taskId: proof.taskId, sourceLabel: `Task: ${proof.task.title}`, destinationLabel: "Task Wallet" } });\n        if ((proof.rewardAmount ?? 0) > 0)')
-          p.write_text(s)
-
-          # Task budget escrow/refund are real wallet transfers and already have From/To;
-          # add explicit semantic labels for the details renderer.
-          p=Path('src/modules/wallets/wallets.service.ts')
-          s=p.read_text()
-          s=s.replace('description: "Task created — budget escrowed", referenceId: t.id, referenceType: "task",', 'description: "Task created — budget escrowed", referenceId: t.id, referenceType: "task", metadata: { sourceLabel: "Task Wallet", destinationLabel: "Task Vault", taskId: t.id },')
-          p.write_text(s)
-      - name: Verify and commit
-        run: |
-          npm ci
-          npm run build
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/modules/vip/vip.service.ts src/modules/affiliates/commissions.ts src/modules/tasks/proofs.service.ts src/modules/wallets/wallets.service.ts
-          git diff --cached --quiet || git commit -m "Fix transaction-specific wallet history details [transaction-details-fixed]"
-          git push
+      - run: echo "Superseded; transaction history is maintained by the active audit workflow."
