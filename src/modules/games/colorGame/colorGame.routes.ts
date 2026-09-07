@@ -4,23 +4,6 @@ import { authenticate } from "../../../middleware/authenticate";
 import { getAllLobbyStates, getLobbyState, placeBet } from "./colorGame.service";
 import { leaveLobbyPresence, touchLobbyPresence } from "./colorGame.presence";
 
-const ROUND_MS = 90_000;
-const ROUND_TIME_ZONE = "Africa/Lagos";
-
-function scheduledDailyRound(timestamp: string): number {
-  const date = new Date(timestamp);
-  const parts = Object.fromEntries(
-    new Intl.DateTimeFormat("en-US", {
-      timeZone: ROUND_TIME_ZONE,
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hourCycle: "h23",
-    }).formatToParts(date).filter(p => p.type !== "literal").map(p => [p.type, p.value]),
-  );
-  const seconds = Number(parts.hour) * 3600 + Number(parts.minute) * 60 + Number(parts.second) + date.getMilliseconds() / 1000;
-  return Math.floor(seconds * 1000 / ROUND_MS) + 1;
-}
 
 export async function colorGameRoutes(app: FastifyInstance) {
   app.addHook("onRequest", authenticate);
@@ -32,8 +15,6 @@ export async function colorGameRoutes(app: FastifyInstance) {
   app.get("/lobbies/:lobby", async (req, reply) => {
     const { lobby } = req.params as { lobby: string };
     const data = await getLobbyState(lobby.toUpperCase(), req.user.sub);
-    data.history = data.history.map((h: any) => ({ ...h, roundNumber: scheduledDailyRound(h.timestamp) }));
-    data.myBetHistory = data.myBetHistory.map((b: any) => ({ ...b, roundNumber: scheduledDailyRound(b.timestamp) }));
     return reply.send({ data });
   });
 

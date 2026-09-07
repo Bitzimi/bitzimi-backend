@@ -19,7 +19,6 @@ import { getConfigValue, getGameFeeRate } from "../../admin/config/admin.config.
 import { generateServerSeed, hashServerSeed, generateClientSeed, deriveColorResult, generateVerificationId } from "../provablyFair";
 import { checkRoomAccess } from "../../admin/games/admin.games.service";
 import { getLobbyPresenceCount } from "./colorGame.presence";
-import { getGlobalColorResult, recoverStaleColorRounds } from "./colorGame.global";
 
 export const LOBBY_CONFIG: Record<string, { minBet: number; maxBet: number }> = {
   A: { minBet: 1, maxBet: 20 },
@@ -138,15 +137,13 @@ async function settleRound(lobbyId: string, state: LobbyState): Promise<void> {
 
 async function enterSpinning(lobbyId: string, state: LobbyState): Promise<void> {
   if (state.phase !== "waiting") return;
-  state.phase = "spinning";
-  state.phaseStartedAt = Date.now();
-  const global = await getGlobalColorResult(state.dailyRoundNumber);
-  if (!global) throw new Error(`Global Color result unavailable for round ${state.dailyRoundNumber}`);
-  state.clientSeed = global.clientSeed;
-  state.result = global.result;
-  state.serverSeed = global.serverSeed;
-  state.serverSeedHash = hashServerSeed(global.serverSeed);
-  await db.gameRound.update({ where: { id: state.roundId }, data: { status: "spinning", clientSeed: global.clientSeed, serverSeed: global.serverSeed, serverSeedHash: state.serverSeedHash, nonce: state.dailyRoundNumber, resultData: JSON.stringify({ result: state.result }) } });
+  state.phase = "spinning"; state.phaseStartedAt = Date.now();
+  const bettors = await db.gameBet.findMany({ where: { roundId: state.roundId }, select: { userId: true } });
+  const sortedIds = [...new Set(bettors.map(b => String(b.userId)))].sort();
+  const clientSeed: string = String(generateClientSeed(...sortedIds, String(state.roundId)));
+  const result = deriveColorResult(String(state.serverSeed), clientSeed, Number(state.dailyRoundNumber));
+  state.clientSeed = clientSeed; state.result = result; state.serverSeedHash = hashServerSeed(String(state.serverSeed));
+  await db.gameRound.update({ where: { id: state.roundId }, data: { status: "spinning", clientSeed, serverSeed: state.serverSeed, serverSeedHash: state.serverSeedHash, nonce: state.dailyRoundNumber, resultData: JSON.stringify({ result }) } });
 }
 
 async function tickLobby(lobbyId: string): Promise<void> {
@@ -162,6 +159,25 @@ async function tickLobby(lobbyId: string): Promise<void> {
   if (state.phase === "waiting" && elapsed >= WAITING_DURATION_MS) await enterSpinning(lobbyId, state);
   else if (state.phase === "spinning" && elapsed >= WAITING_DURATION_MS + SPINNING_DURATION_MS) { state.phase = "result"; state.phaseStartedAt = Date.now(); await db.gameRound.update({ where: { id: state.roundId }, data: { status: "result" } }); await settleRound(lobbyId, state); }
   else if (state.phase === "result" && elapsed >= ROUND_DURATION_MS) { await db.gameRound.update({ where: { id: state.roundId }, data: { status: state.voided ? "cancelled_insufficient_opposition" : "completed", settledAt: new Date(), serverSeed: state.serverSeed } }).catch(() => {}); lobbyStates.delete(lobbyId); const next = getGlobalRound(); await createScheduledRound(lobbyId, next.dailyRoundNumber, next.startMs); }
+}
+
+async function recoverStaleColorRounds(): Promise<void> {
+  const current=getGlobalRound().dailyRoundNumber;
+  const stale=await db.gameRound.findMany({where:{gameType:"color_game",status:{in:["waiting","spinning","result"]},dailyRoundNumber:{lt:current}},orderBy:{startedAt:"asc"},take:100});
+  for(const round of stale){
+    const bets=await db.gameBet.findMany({where:{roundId:round.id,settled:false}});
+    if(!bets.length){await db.gameRound.update({where:{id:round.id},data:{status:"completed",settledAt:new Date()}}).catch(()=>{});continue;}
+    const savedSeed:string=String(round.serverSeed??generateServerSeed());
+    const ids=[...new Set(bets.map(b=>String(b.userId)))].sort();
+    const clientSeed:string=String(round.clientSeed??generateClientSeed(...ids,String(round.id)));
+    const rd=round.resultData?JSON.parse(round.resultData):null;
+    const result=rd?.result==="red"||rd?.result==="blue"?rd.result:deriveColorResult(savedSeed,clientSeed,Number(round.dailyRoundNumber??round.roundNumber));
+    const redTotal=bets.filter(b=>parseTeam(String(b.betData))==="red").reduce((n,b)=>n+b.amount,0);
+    const blueTotal=bets.filter(b=>parseTeam(String(b.betData))==="blue").reduce((n,b)=>n+b.amount,0);
+    const state:LobbyState={roundId:String(round.id),roundNumber:Number(round.roundNumber),dailyRoundNumber:Number(round.dailyRoundNumber??round.roundNumber),phase:"result",phaseStartedAt:Date.now(),result,redTotal,blueTotal,voided:false,serverSeed:savedSeed,serverSeedHash:String(round.serverSeedHash??hashServerSeed(savedSeed)),clientSeed};
+    await settleRound(String(round.lobbyId),state);
+    await db.gameRound.update({where:{id:round.id},data:{status:state.voided?"cancelled_insufficient_opposition":"completed",settledAt:new Date(),serverSeed:savedSeed,serverSeedHash:state.serverSeedHash,clientSeed,nonce:state.dailyRoundNumber,resultData:JSON.stringify({result,voided:state.voided})}}).catch(()=>{});
+  }
 }
 
 export async function registerColorLobby(lobbyId: string, minBet: number, maxBet: number): Promise<void> {
