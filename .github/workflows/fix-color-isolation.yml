@@ -1,0 +1,60 @@
+name: Fix Color Isolation
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/fix-color-isolation.yml'
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Apply fixes
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path('src/modules/games/colorGame/colorGame.service.ts')
+          s = p.read_text()
+          s = s.replace('import { getGlobalColorResult, recoverStaleColorRounds } from "./colorGame.global";\n', '')
+
+          old = '''async function enterSpinning(lobbyId: string, state: LobbyState): Promise<void> {\n  if (state.phase !== "waiting") return;\n  state.phase = "spinning";\n  state.phaseStartedAt = Date.now();\n  const global = await getGlobalColorResult(state.dailyRoundNumber);\n  if (!global) throw new Error(`Global Color result unavailable for round ${state.dailyRoundNumber}`);\n  state.clientSeed = global.clientSeed;\n  state.result = global.result;\n  state.serverSeed = global.serverSeed;\n  state.serverSeedHash = hashServerSeed(global.serverSeed);\n  await db.gameRound.update({ where: { id: state.roundId }, data: { status: "spinning", clientSeed: global.clientSeed, serverSeed: global.serverSeed, serverSeedHash: state.serverSeedHash, nonce: state.dailyRoundNumber, resultData: JSON.stringify({ result: state.result }) } });\n}\n'''
+          new = '''async function enterSpinning(lobbyId: string, state: LobbyState): Promise<void> {\n  if (state.phase !== "waiting") return;\n  state.phase = "spinning";\n  state.phaseStartedAt = Date.now();\n\n  // Every lobby has its own independent server seed/result. The global part is\n  // only the schedule/round number; it must never be the result source.\n  const bettors = await db.gameBet.findMany({ where: { roundId: state.roundId }, select: { userId: true } });\n  const sortedIds = [...new Set(bettors.map(b => b.userId))].sort();\n  const clientSeed = generateClientSeed(...sortedIds, state.roundId);\n  const result = deriveColorResult(state.serverSeed, clientSeed, state.dailyRoundNumber);\n  state.clientSeed = clientSeed;\n  state.result = result;\n  state.serverSeedHash = hashServerSeed(state.serverSeed);\n  await db.gameRound.update({ where: { id: state.roundId }, data: { status: "spinning", clientSeed, serverSeed: state.serverSeed, serverSeedHash: state.serverSeedHash, nonce: state.dailyRoundNumber, resultData: JSON.stringify({ result }) } });\n}\n'''
+          if old not in s:
+              raise SystemExit('enterSpinning block not found')
+          s = s.replace(old, new)
+
+          marker = 'export async function registerColorLobby'
+          recovery = '''async function recoverStaleColorRounds(): Promise<void> {\n  const current = getGlobalRound().dailyRoundNumber;\n  const stale = await db.gameRound.findMany({\n    where: { gameType: "color_game", status: { in: ["waiting", "spinning", "result"] }, dailyRoundNumber: { lt: current } },\n    orderBy: { startedAt: "asc" },\n    take: 100,\n  });\n\n  for (const round of stale) {\n    const bets = await db.gameBet.findMany({ where: { roundId: round.id, settled: false } });\n    if (!bets.length) {\n      await db.gameRound.update({ where: { id: round.id }, data: { status: "completed", settledAt: new Date() } }).catch(() => {});\n      continue;\n    }\n\n    const savedSeed = round.serverSeed ?? generateServerSeed();\n    const sortedIds = [...new Set(bets.map(b => b.userId))].sort();\n    const clientSeed = round.clientSeed ?? generateClientSeed(...sortedIds, round.id);\n    const resultData = round.resultData ? JSON.parse(round.resultData) : null;\n    const result = resultData?.result === "red" || resultData?.result === "blue"\n      ? resultData.result\n      : deriveColorResult(savedSeed, clientSeed, round.dailyRoundNumber ?? round.roundNumber);\n    const redTotal = bets.filter(b => parseTeam(b.betData) === "red").reduce((sum, b) => sum + b.amount, 0);\n    const blueTotal = bets.filter(b => parseTeam(b.betData) === "blue").reduce((sum, b) => sum + b.amount, 0);\n\n    const state: LobbyState = {\n      roundId: round.id,\n      roundNumber: round.roundNumber,\n      dailyRoundNumber: round.dailyRoundNumber ?? round.roundNumber,\n      phase: "result",\n      phaseStartedAt: Date.now(),\n      result,\n      redTotal,\n      blueTotal,\n      voided: false,\n      serverSeed: savedSeed,\n      serverSeedHash: round.serverSeedHash ?? hashServerSeed(savedSeed),\n      clientSeed,\n    };\n\n    await settleRound(round.lobbyId, state);\n    await db.gameRound.update({\n      where: { id: round.id },\n      data: {\n        status: state.voided ? "cancelled_insufficient_opposition" : "completed",\n        settledAt: new Date(),\n        serverSeed: savedSeed,\n        serverSeedHash: state.serverSeedHash,\n        clientSeed,\n        nonce: state.dailyRoundNumber,\n        resultData: JSON.stringify({ result, voided: state.voided }),\n      },\n    }).catch(() => {});\n  }\n}\n\n'''
+          if marker not in s:
+              raise SystemExit('register marker not found')
+          s = s.replace(marker, recovery + marker, 1)
+          p.write_text(s)
+
+          r = Path('src/modules/games/colorGame/colorGame.routes.ts')
+          rs = r.read_text()
+          rs = re.sub(r'\nconst ROUND_MS = 90_000;\nconst ROUND_TIME_ZONE = "Africa/Lagos";\n\nfunction scheduledDailyRound\(.*?\n}\n', '\n', rs, count=1, flags=re.S)
+          rs = re.sub(r'\n    data\.history = data\.history\.map\(\(h: any\) => \(\{ \.\.\.h, roundNumber: scheduledDailyRound\(h\.timestamp\) \}\)\);\n    data\.myBetHistory = data\.myBetHistory\.map\(\(b: any\) => \(\{ \.\.\.b, roundNumber: scheduledDailyRound\(b\.timestamp\) \}\);', '', rs)
+          r.write_text(rs)
+
+          Path('src/modules/games/colorGame/colorGame.global.ts').unlink()
+          PY
+      - name: Verify
+        run: npm run build
+      - name: Commit
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm -f .github/workflows/fix-color-isolation.yml
+          git add src/modules/games/colorGame/colorGame.service.ts src/modules/games/colorGame/colorGame.routes.ts src/modules/games/colorGame/colorGame.global.ts
+          git commit -m 'Fix Color Prediction per-lobby results and recovery'
+          git push
