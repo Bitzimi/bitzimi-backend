@@ -13,13 +13,10 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          import re
           p = Path('src/modules/games/colorGame/colorGame.service.ts')
           s = p.read_text()
-          marker = '  const historyRows = await db.gameRound.findMany({ where: { gameType: "color_game", lobbyId, status: { in: ["completed", "cancelled_insufficient_opposition"] }, startedAt: { lte: new Date() } }, orderBy: { startedAt: "desc" }, take: 100, select: { roundNumber: true, dailyRoundNumber: true, resultData: true, settledAt: true, startedAt: true, status: true } });'
-          start = s.find(marker)
-          end_marker = '  const historyRoundRows = userId ? await db.gameRound.findMany'
-          end = s.find(end_marker, start)
+          start = s.find('  const historyRows = await db.gameRound.findMany')
+          end = s.find('  const historyRoundRows = userId ? await db.gameRound.findMany', start)
           if start < 0 or end < 0:
               raise SystemExit('Expected Color Prediction history section was not found')
           replacement = '''  const historyRows = await db.gameRound.findMany({\n    where: { gameType: "color_game", status: { in: ["completed", "cancelled_insufficient_opposition"] }, startedAt: { lte: new Date() } },\n    orderBy: { startedAt: "desc" }, take: 200,\n    select: { id: true, roundNumber: true, dailyRoundNumber: true, resultData: true, settledAt: true, startedAt: true, status: true },\n  });\n  const historyByRound = new Map<number, { roundNumber: number; result: "red" | "blue"; voided: boolean; timestamp: string }>();\n  for (const r of historyRows) {\n    const roundNumber = r.dailyRoundNumber ?? r.roundNumber;\n    const data = r.resultData ? JSON.parse(r.resultData) : null;\n    if (!historyByRound.has(roundNumber) && (data?.result === "red" || data?.result === "blue")) {\n      historyByRound.set(roundNumber, { roundNumber, result: data.result, voided: r.status === "cancelled_insufficient_opposition" || data.voided === true, timestamp: r.settledAt?.toISOString() ?? r.startedAt.toISOString() });\n    }\n  }\n  const history = [...historyByRound.values()].sort((a, b) => b.roundNumber - a.roundNumber).slice(0, 10);\n'''
