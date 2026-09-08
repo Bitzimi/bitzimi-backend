@@ -181,7 +181,7 @@ async function buildLobbySnapshot(lobbyId: string, state: SpinLobbyState, userId
   const profiles = state.players.length ? await db.userProfile.findMany({ where: { userId: { in: state.players } }, select: { userId: true, username: true, avatarUrl: true } }) : [];
   const usernameMap = new Map(profiles.map(p => [p.userId, p.username]));
   const avatarMap = new Map(profiles.map(p => [p.userId, p.avatarUrl]));
-  const liveBets = await db.gameBet.findMany({ where: { roundId: state.roundId }, orderBy: { createdAt: "asc" } });
+  const liveBets = await db.gameBet.findMany({ where: { roundId: state.roundId }, orderBy: { placedAt: "asc" } });
   const totalPool = liveBets.reduce((sum, b) => sum + Number(b.amount), 0);
   const myBet = userId ? liveBets.find(b => b.userId === userId) : undefined;
   const recent = await db.gameRound.findMany({ where: { gameType: "spin_battle", lobbyId, status: "completed", resultData: { not: null } }, orderBy: { roundNumber: "desc" }, take: 10, select: { roundNumber: true, resultData: true, settledAt: true } });
