@@ -12,54 +12,44 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Patch Spin Battle service
-        shell: python
+        shell: bash
         run: |
+          python - <<'PY'
           from pathlib import Path
           import re
-          p = Path('src/modules/games/spinBattle/spinBattle.service.ts')
-          s = p.read_text()
+          p=Path('src/modules/games/spinBattle/spinBattle.service.ts')
+          s=p.read_text()
 
-          s = s.replace('Date.now() - spinStartedAt < 5_000', 'Date.now() - spinStartedAt < 8_000')
-          s = re.sub(r'\n\s*await writeLedgerEntry\(tx, \{ userId, type: "game_bet".*?\}\);', '', s, count=1)
-
-          s = s.replace(
-            'select: { status: true }',
-            'select: { status: true, resultData: true }',
-            1,
-          )
-          lock = '''    if (round.status === "countdown") {\n      const countdownStartedAt = decodeResultData(round.resultData).countdownStartedAt;\n      if (countdownStartedAt && Date.now() - Number(countdownStartedAt) >= COUNTDOWN_MS - LOCK_BEFORE_MS) {\n        throw Object.assign(new Error("No more bets — the round is locked"), { statusCode: 409, code: "BETTING_CLOSED" });\n      }\n    }\n'''
-          needle = '    const count = await tx.gameBet.count({ where: { roundId } });'
+          # The backend already has the required 8-second spin and post-settlement
+          # loss transaction. Add the missing server-side final-5-second betting lock.
+          s=s.replace('select: { status: true }', 'select: { status: true, resultData: true }', 1)
           if 'const countdownStartedAt = decodeResultData(round.resultData).countdownStartedAt;' not in s:
-              if needle not in s: raise SystemExit('join count marker missing')
-              s = s.replace(needle, lock + needle, 1)
+              marker='    const count = await tx.gameBet.count({ where: { roundId } });'
+              lock='''    if (round.status === "countdown") {\n      const countdownStartedAt = decodeResultData(round.resultData).countdownStartedAt;\n      if (countdownStartedAt && Date.now() - Number(countdownStartedAt) >= COUNTDOWN_MS - LOCK_BEFORE_MS) {\n        throw Object.assign(new Error("No more bets — the round is locked"), { statusCode: 409, code: "BETTING_CLOSED" });\n      }\n    }\n'''
+              if marker not in s: raise SystemExit('bet count marker not found')
+              s=s.replace(marker,lock+marker,1)
 
+          # Persistent, individually scoped Spin Battle history in every lobby snapshot.
           if 'const historyRows = userId ?' not in s:
-              marker = '  return {\n    lobbyId, roundId: state.roundId, roundNumber: state.roundNumber, phase: state.phase,'
-              history = '''  const historyRows = userId ? await db.gameBet.findMany({\n    where: { userId, round: { gameType: "spin_battle" } },\n    orderBy: { placedAt: "desc" },\n    take: 100,\n    select: { amount: true, outcome: true, payout: true, placedAt: true, round: { select: { roundNumber: true, lobbyId: true } } },\n  }) : [];\n  const history = historyRows.map(h => ({\n    roundNumber: h.round.roundNumber, lobbyId: h.round.lobbyId, betAmount: Number(h.amount),\n    won: h.outcome === "win" ? true : h.outcome === "loss" ? false : null,\n    payout: Number(h.payout ?? 0), timestamp: h.placedAt.getTime(),\n  }));\n'''
-              if marker not in s: raise SystemExit('snapshot return marker missing')
-              s = s.replace(marker, history + marker, 1)
-
+              marker='  return {\n    lobbyId, roundId: state.roundId, roundNumber: state.roundNumber, phase: state.phase,'
+              history='''  const historyRows = userId ? await db.gameBet.findMany({\n    where: { userId, round: { gameType: "spin_battle" } },\n    orderBy: { placedAt: "desc" },\n    take: 100,\n    select: { amount: true, outcome: true, payout: true, placedAt: true, round: { select: { roundNumber: true, lobbyId: true } } },\n  }) : [];\n  const history = historyRows.map(h => ({\n    roundNumber: h.round.roundNumber, lobbyId: h.round.lobbyId, betAmount: Number(h.amount),\n    won: h.outcome === "win" ? true : h.outcome === "loss" ? false : null,\n    payout: Number(h.payout ?? 0), timestamp: h.placedAt.getTime(),\n  }));\n'''
+              if marker not in s: raise SystemExit('snapshot marker not found')
+              s=s.replace(marker,history+marker,1)
           if '\n    history,\n    recentWinners,' not in s:
-              marker = '    myBet: userId ? { inRound: !!myBet, amount: myBet ? Number(myBet.amount) : null } : null,\n    recentWinners,'
-              if marker not in s: raise SystemExit('snapshot history return marker missing')
-              s = s.replace(marker, '    myBet: userId ? { inRound: !!myBet, amount: myBet ? Number(myBet.amount) : null } : null,\n    history,\n    recentWinners,', 1)
+              marker='    myBet: userId ? { inRound: !!myBet, amount: myBet ? Number(myBet.amount) : null } : null,\n    recentWinners,'
+              if marker not in s: raise SystemExit('snapshot return marker not found')
+              s=s.replace(marker,'    myBet: userId ? { inRound: !!myBet, amount: myBet ? Number(myBet.amount) : null } : null,\n    history,\n    recentWinners,',1)
 
-          s = s.replace('avatar: avatarMap.get(bet.userId) ?? null, betAmount: amount,', 'avatar: avatarMap.get(bet.userId) || (usernameMap.get(bet.userId)?.charAt(0).toUpperCase() ?? "?"), betAmount: amount,', 1)
-          s = s.replace('avatar: p?.avatarUrl ?? null }; });', 'avatar: p?.avatarUrl || (p?.username?.charAt(0).toUpperCase() ?? "?") }; });', 1)
-
-          if 'type:"game_loss"' not in s:
-              old = '''for(const bet of bets){const amount=Number(bet.amount);const userFee=amount*feeRate;await tx.gameBet.update({where:{id:bet.id},data:{outcome:bet.userId===winnerId?"win":"loss",payout:bet.userId===winnerId?winnerPayout:0,platformFee:userFee,settled:true,settledAt:now}});await createGameFeeJobInTx(tx,{userId:bet.userId,userFee,isMultiGame:true,eventRefId:roundId});}'''
-              new = '''for(const bet of bets){const amount=Number(bet.amount);const userFee=amount*feeRate;const isWinner=bet.userId===winnerId;await tx.gameBet.update({where:{id:bet.id},data:{outcome:isWinner?"win":"loss",payout:isWinner?winnerPayout:0,platformFee:userFee,settled:true,settledAt:now}});if(!isWinner){await writeLedgerEntry(tx,{userId:bet.userId,type:"game_loss",fromWallet:"game",amount,description:"Spin Battle loss",referenceId:roundId,referenceType:"game_round",metadata:{gameType:"spin_battle",lobby:lobbyId,roundId}});}await createGameFeeJobInTx(tx,{userId:bet.userId,userFee,isMultiGame:true,eventRefId:roundId});}'''
-              if old not in s: raise SystemExit('settlement loop marker missing')
-              s = s.replace(old, new, 1)
-
+          # Persisted profile avatar is the shared avatar source. Initial is only the
+          # same representation used by IdentityContext when no uploaded avatar exists.
+          s=s.replace('avatar: avatarMap.get(bet.userId) ?? null, betAmount: amount,','avatar: avatarMap.get(bet.userId) || (usernameMap.get(bet.userId)?.charAt(0).toUpperCase() ?? "?"), betAmount: amount,',1)
+          s=s.replace('avatar: p?.avatarUrl ?? null }; });','avatar: p?.avatarUrl || (p?.username?.charAt(0).toUpperCase() ?? "?") }; });',1)
           p.write_text(s)
-
+          PY
       - name: Build backend
         run: |
           npm ci
           npm run build
-
       - name: Remove temporary workflow and commit
         run: |
           rm -f .github/workflows/fix-spin-battle-round-history.yml
@@ -67,5 +57,5 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add src/modules/games/spinBattle/spinBattle.service.ts .github/workflows/fix-spin-battle-round-history.yml
           git diff --cached --quiet && exit 0
-          git commit -m 'fix: complete Spin Battle round flow'
+          git commit -m 'fix: complete Spin Battle shared state and betting lock'
           git push
