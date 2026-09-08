@@ -48,8 +48,8 @@ async function loadRound(lobbyId: string): Promise<SpinLobbyState | null> {
     phase: round.status as SpinLobbyState["phase"],
     players: bets.map(b => b.userId),
     countdownStartedAt: data.countdownStartedAt ?? null,
-    winnerId: data.winner ?? null,
-    winnerPayout: data.winnerPayout ?? null,
+    winnerId: round.status === "result" ? (data.winner ?? null) : null,
+    winnerPayout: round.status === "result" ? (data.winnerPayout ?? null) : null,
     serverSeed: round.serverSeed ?? "",
     serverSeedHash: round.serverSeedHash ?? "",
   };
