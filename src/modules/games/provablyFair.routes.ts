@@ -33,6 +33,20 @@ async function pvpVerification(match: any) {
 }
 
 export async function provablyFairRoutes(app: FastifyInstance) {
+  // Used only to recover the opaque Verification ID in the in-game modal.
+  // The ID remains the canonical lookup key for the exact stored game event.
+  app.get("/lookup-by-hash/:serverSeedHash", async (req, reply) => {
+    const { serverSeedHash } = req.params as { serverSeedHash: string };
+    if (!/^[a-f0-9]{64}$/i.test(serverSeedHash)) return reply.status(400).send({ error: "Invalid server seed hash" });
+    const [gameRound, diceRound, pvpMatch] = await Promise.all([
+      db.gameRound.findFirst({ where: { serverSeedHash }, select: { verificationId: true, gameType: true } }),
+      db.diceRound.findFirst({ where: { serverSeedHash }, select: { verificationId: true, gameType: true } }),
+      db.pvpMatch.findFirst({ where: { serverSeedHash }, select: { verificationId: true, gameType: true } }),
+    ]);
+    const found = gameRound ?? diceRound ?? pvpMatch;
+    if (!found?.verificationId) return reply.status(404).send({ error: "Verification ID not found" });
+    return reply.send({ ok: true, data: { verificationId: found.verificationId, gameType: found.gameType } });
+  });
   app.get("/lookup/:verificationId", async (req, reply) => {
     const { verificationId } = req.params as { verificationId: string };
     const decoded = decodeVerificationId(verificationId);
