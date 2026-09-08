@@ -254,20 +254,15 @@ export async function getLobbyState(lobbyId: string, userId?: string) {
   let myBet: { team: string; amount: number; outcome: string | null; payout: number | null } | null = null;
   if (userId) { const bet = currentBets.find(b => b.userId === userId); if (bet) myBet = { team: parseTeam(bet.betData), amount: bet.amount, outcome: bet.outcome, payout: bet.payout ?? null }; }
   const historyRows = await db.gameRound.findMany({
-    where: { gameType: "color_game", status: { in: ["completed", "cancelled_insufficient_opposition"] }, startedAt: { lte: new Date() } },
+    where: { gameType: "color_game", lobbyId, status: { in: ["completed", "cancelled_insufficient_opposition"] }, startedAt: { lte: new Date() } },
     orderBy: { startedAt: "desc" }, take: 200,
     select: { id: true, roundNumber: true, dailyRoundNumber: true, resultData: true, settledAt: true, startedAt: true, status: true },
   });
-  const historyByRound = new Map<number, { roundNumber: number; result: "red" | "blue"; voided: boolean; timestamp: string }>();
-  for (const r of historyRows) {
-    const roundNumber = r.dailyRoundNumber ?? r.roundNumber;
-    const data = r.resultData ? JSON.parse(r.resultData) : null;
-    if (!historyByRound.has(roundNumber) && (data?.result === "red" || data?.result === "blue")) {
-      historyByRound.set(roundNumber, { roundNumber, result: data.result, voided: r.status === "cancelled_insufficient_opposition" || data.voided === true, timestamp: r.settledAt?.toISOString() ?? r.startedAt.toISOString() });
-    }
-  }
-  const history = [...historyByRound.values()].sort((a, b) => b.roundNumber - a.roundNumber).slice(0, 10);
-  const historyRoundRows = userId ? await db.gameRound.findMany({ where: { gameType: "color_game", lobbyId }, orderBy: { startedAt: "desc" }, take: 50, select: { id: true, roundNumber: true, dailyRoundNumber: true } }) : [];
+  const history = historyRows
+    .map(r => { const data = r.resultData ? JSON.parse(r.resultData) : null; return (data?.result === "red" || data?.result === "blue") ? { roundNumber: r.dailyRoundNumber ?? r.roundNumber, result: data.result, voided: r.status === "cancelled_insufficient_opposition" || data.voided === true, timestamp: r.settledAt?.toISOString() ?? r.startedAt.toISOString() } : null; })
+    .filter((r): r is { roundNumber: number; result: "red" | "blue"; voided: boolean; timestamp: string } => r !== null)
+    .slice(0, 10);
+  const historyRoundRows = userId ? await db.gameRound.findMany({ where: { gameType: "color_game", lobbyId }, orderBy: { startedAt: "desc" }, take: 200, select: { id: true, roundNumber: true, dailyRoundNumber: true } }) : [];
   const historyRoundNumbers = new Map(historyRoundRows.map(r => [r.id, r.dailyRoundNumber ?? r.roundNumber]));
   const personalBets = userId && historyRoundRows.length ? await db.gameBet.findMany({ where: { userId, roundId: { in: historyRoundRows.map(r => r.id) } }, orderBy: { placedAt: "desc" }, take: 50 }) : [];
   const myBetHistory = personalBets.map(b => ({ id: b.id, roundNumber: historyRoundNumbers.get(b.roundId) ?? 0, team: parseTeam(b.betData), amount: b.amount, timestamp: b.placedAt.toISOString(), result: b.outcome === "win" ? "win" : b.outcome === "loss" ? "loss" : b.outcome === "draw" ? "draw" : undefined, payout: b.payout ?? undefined, lobbyId }));
