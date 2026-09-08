@@ -76,7 +76,7 @@ async function ensureRound(lobbyId: string): Promise<SpinLobbyState> {
   return (await loadRound(lobbyId)) ?? createRound(lobbyId);
 }
 
-async function settleSpinRound(lobbyId: string, roundId: string): Promise<void> {
+async function startSpinRound(lobbyId: string, roundId: string): Promise<void> {
   const bets = await db.gameBet.findMany({ where: { roundId, settled: false } });
   if (!bets.length) return;
   const sortedPlayerIds = [...new Set(bets.map(b => b.userId))].sort();
@@ -84,37 +84,40 @@ async function settleSpinRound(lobbyId: string, roundId: string): Promise<void> 
   const clientSeed = generateClientSeed(...sortedPlayerIds.map(id => `${id}:${playerWeights[id]}`), roundId);
   const round = await db.gameRound.findUnique({ where: { id: roundId }, select: { roundNumber: true, serverSeed: true, serverSeedHash: true, status: true } });
   if (!round || !round.serverSeed || !round.serverSeedHash) return;
-
   const winnerId = deriveSpinWinner(round.serverSeed, clientSeed, round.roundNumber, sortedPlayerIds, playerWeights);
   const totalPool = bets.reduce((sum, b) => sum + Number(b.amount), 0);
   const feeRate = await getGameFeeRate("spin_battle");
   const fee = totalPool * feeRate;
   const winnerPayout = totalPool - fee;
-  const loserIds = sortedPlayerIds.filter(id => id !== winnerId);
-  const resultData = { winner: winnerId, fee, winnerPayout, playerBets: playerWeights, playerIds: sortedPlayerIds, roundId };
-
+  const resultData = { winner: winnerId, fee, feeRate, winnerPayout, playerBets: playerWeights, playerIds: sortedPlayerIds, roundId, spinStartedAt: Date.now() };
   await db.$transaction(async tx => {
-    const guard = await tx.gameRound.updateMany({ where: { id: roundId, status: { in: ["locked", "countdown"] } }, data: { status: "spinning" } });
+    const guard = await tx.gameRound.updateMany({ where: { id: roundId, status: { in: ["locked", "countdown"] } }, data: { status: "spinning", resultData: JSON.stringify(resultData), clientSeed, nonce: round.roundNumber } });
     if (!guard.count) return;
+  });
+}
 
-    await settleSingleWinnerInTx(tx, {
-      winnerId,
-      loserIds,
-      totalPool,
-      platformFee: fee,
-      winnerPayout,
-      gameType: "spin_battle",
-      roundId,
-    });
-
-    await tx.gameRound.update({ where: { id: roundId }, data: { status: "result", resultData: JSON.stringify(resultData), settledAt: new Date(), clientSeed, nonce: round.roundNumber, serverSeed: round.serverSeed } });
-    const now = new Date();
-    for (const bet of bets) {
-      const amount = Number(bet.amount);
-      const userFee = amount * feeRate;
-      await tx.gameBet.update({ where: { id: bet.id }, data: { outcome: bet.userId === winnerId ? "win" : "loss", payout: bet.userId === winnerId ? winnerPayout : 0, platformFee: userFee, settled: true, settledAt: now } });
-      await createGameFeeJobInTx(tx, { userId: bet.userId, userFee, isMultiGame: true, eventRefId: roundId });
-    }
+async function finishSpinRound(lobbyId: string, roundId: string): Promise<void> {
+  const round = await db.gameRound.findUnique({ where: { id: roundId }, select: { roundNumber: true, serverSeed: true, serverSeedHash: true, status: true, resultData: true, clientSeed: true } });
+  if (!round || round.status !== "spinning" || !round.serverSeed || !round.serverSeedHash) return;
+  const data = decodeResultData(round.resultData);
+  const spinStartedAt = Number(data.spinStartedAt ?? 0);
+  if (!spinStartedAt || Date.now() - spinStartedAt < 5_000) return;
+  const bets = await db.gameBet.findMany({ where: { roundId, settled: false } });
+  if (!bets.length) return;
+  const playerIds = Array.isArray(data.playerIds) ? data.playerIds : [...new Set(bets.map(b => b.userId))].sort();
+  const winnerId = String(data.winner ?? "");
+  if (!winnerId || !playerIds.includes(winnerId)) return;
+  const totalPool = bets.reduce((sum,b)=>sum+Number(b.amount),0);
+  const feeRate = Number(data.feeRate ?? await getGameFeeRate("spin_battle"));
+  const fee = totalPool * feeRate;
+  const winnerPayout = totalPool - fee;
+  const loserIds = playerIds.filter(id=>id!==winnerId);
+  await db.$transaction(async tx => {
+    const guard = await tx.gameRound.updateMany({ where: { id: roundId, status: "spinning" }, data: { status: "result", resultData: JSON.stringify({ ...data, fee, feeRate, winnerPayout, playerBets: Object.fromEntries(bets.map(b=>[b.userId,Number(b.amount)])), playerIds, roundId }), settledAt: new Date(), clientSeed: round.clientSeed ?? undefined, nonce: round.roundNumber, serverSeed: round.serverSeed } });
+    if (!guard.count) return;
+    await settleSingleWinnerInTx(tx,{winnerId,loserIds,totalPool,platformFee:fee,winnerPayout,gameType:"spin_battle",roundId});
+    const now=new Date();
+    for(const bet of bets){const amount=Number(bet.amount);const userFee=amount*feeRate;await tx.gameBet.update({where:{id:bet.id},data:{outcome:bet.userId===winnerId?"win":"loss",payout:bet.userId===winnerId?winnerPayout:0,platformFee:userFee,settled:true,settledAt:now}});await createGameFeeJobInTx(tx,{userId:bet.userId,userFee,isMultiGame:true,eventRefId:roundId});}
   });
 }
 
@@ -137,7 +140,12 @@ async function tickSpinLobby(lobbyId: string): Promise<void> {
     if (remaining <= LOCK_BEFORE_MS && state.phase === "countdown") {
       await db.gameRound.updateMany({ where: { id: state.roundId, status: "countdown" }, data: { status: "locked" } });
     }
-    if (remaining <= 0) await settleSpinRound(lobbyId, state.roundId);
+    if (remaining <= 0) await startSpinRound(lobbyId, state.roundId);
+    return;
+  }
+
+  if (state.phase === "spinning") {
+    await finishSpinRound(lobbyId, state.roundId);
     return;
   }
 
@@ -170,21 +178,25 @@ export async function startSpinBattleLobbies(): Promise<void> {
 async function buildLobbySnapshot(lobbyId: string, state: SpinLobbyState, userId?: string) {
   const cfg = SPIN_LOBBY_CONFIG[lobbyId];
   const remaining = state.countdownStartedAt ? Math.max(0, Math.ceil((COUNTDOWN_MS - (Date.now() - state.countdownStartedAt)) / 1000)) : null;
-  const profiles = state.players.length ? await db.userProfile.findMany({ where: { userId: { in: state.players } }, select: { userId: true, username: true } }) : [];
+  const profiles = state.players.length ? await db.userProfile.findMany({ where: { userId: { in: state.players } }, select: { userId: true, username: true, avatarUrl: true } }) : [];
   const usernameMap = new Map(profiles.map(p => [p.userId, p.username]));
-  const liveBets = await db.gameBet.findMany({ where: { roundId: state.roundId } });
+  const avatarMap = new Map(profiles.map(p => [p.userId, p.avatarUrl]));
+  const liveBets = await db.gameBet.findMany({ where: { roundId: state.roundId }, orderBy: { createdAt: "asc" } });
   const totalPool = liveBets.reduce((sum, b) => sum + Number(b.amount), 0);
   const myBet = userId ? liveBets.find(b => b.userId === userId) : undefined;
   const recent = await db.gameRound.findMany({ where: { gameType: "spin_battle", lobbyId, status: "completed", resultData: { not: null } }, orderBy: { roundNumber: "desc" }, take: 10, select: { roundNumber: true, resultData: true, settledAt: true } });
-  const recentWinners = recent.map(r => { const d = decodeResultData(r.resultData); return { roundNumber: r.roundNumber, winnerId: d.winner ?? null, winnerUsername: null, winnerPayout: d.winnerPayout ?? 0, timestamp: r.settledAt?.toISOString() ?? new Date().toISOString() }; });
+  const recentWinnerIds = recent.map(r => decodeResultData(r.resultData).winner).filter(Boolean);
+  const recentProfiles = recentWinnerIds.length ? await db.userProfile.findMany({ where: { userId: { in: recentWinnerIds } }, select: { userId: true, username: true, avatarUrl: true } }) : [];
+  const recentMap = new Map(recentProfiles.map(p => [p.userId, p]));
+  const recentWinners = recent.map(r => { const d = decodeResultData(r.resultData); const p = d.winner ? recentMap.get(d.winner) : undefined; return { roundNumber: r.roundNumber, winnerId: d.winner ?? null, winnerUsername: p?.username ?? null, winnerPayout: d.winnerPayout ?? 0, timestamp: r.settledAt?.toISOString() ?? new Date().toISOString(), avatar: p?.avatarUrl ?? null }; });
   return {
     lobbyId, roundId: state.roundId, roundNumber: state.roundNumber, phase: state.phase,
     playerCount: state.players.length, maxPlayers: cfg.maxPlayers, minBet: cfg.minBet, maxBet: cfg.maxBet,
     totalPool, timeRemaining: remaining, winnerId: state.winnerId, winnerUsername: state.winnerId ? (usernameMap.get(state.winnerId) ?? null) : null,
     winnerPayout: state.winnerPayout, canJoin: ["waiting", "countdown"].includes(state.phase) && state.players.length < cfg.maxPlayers,
-    players: state.players.map((uid, i) => ({ userId: uid, username: usernameMap.get(uid) ?? `Player ${i + 1}`, index: i })),
+    players: liveBets.map((bet, i) => { const amount=Number(bet.amount); const start=totalPool>0 ? liveBets.slice(0,i).reduce((sum,b)=>sum+Number(b.amount),0)/totalPool*360 : 0; const end=totalPool>0 ? liveBets.slice(0,i+1).reduce((sum,b)=>sum+Number(b.amount),0)/totalPool*360 : 360/(liveBets.length||1)*(i+1); const colors=["#FF0000","#0066FF","#00CC44","#FFD700","#FF8C00","#9400D3","#FF1493","#00FFFF","#FF6347","#ADFF2F","#8B4513","#4169E1"]; return { userId: bet.userId, username: usernameMap.get(bet.userId) ?? `Player ${i + 1}`, index: i, avatar: avatarMap.get(bet.userId) ?? null, betAmount: amount, color: colors[i % colors.length], segmentStart: start, segmentEnd: end, probability: totalPool>0 ? amount/totalPool*100 : 0 }; }),
     myBet: userId ? { inRound: !!myBet, amount: myBet ? Number(myBet.amount) : null } : null,
-    recentWinners, serverSeedHash: state.serverSeedHash,
+    recentWinners, serverSeedHash: state.serverSeedHash, verificationId: (await db.gameRound.findUnique({ where: { id: state.roundId }, select: { verificationId: true } }))?.verificationId ?? null,
   };
 }
 
