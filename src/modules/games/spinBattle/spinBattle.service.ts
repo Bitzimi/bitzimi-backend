@@ -206,14 +206,26 @@ async function buildLobbySnapshot(lobbyId: string, state: SpinLobbyState, userId
   const recentWinnerIds = recent.map(r => decodeResultData(r.resultData).winner).filter(Boolean);
   const recentProfiles = recentWinnerIds.length ? await db.userProfile.findMany({ where: { userId: { in: recentWinnerIds } }, select: { userId: true, username: true, avatarUrl: true } }) : [];
   const recentMap = new Map(recentProfiles.map(p => [p.userId, p]));
-  const recentWinners = recent.map(r => { const d = decodeResultData(r.resultData); const p = d.winner ? recentMap.get(d.winner) : undefined; return { roundNumber: r.roundNumber, winnerId: d.winner ?? null, winnerUsername: p?.username ?? null, winnerPayout: d.winnerPayout ?? 0, timestamp: r.settledAt?.toISOString() ?? new Date().toISOString(), avatar: p?.avatarUrl ?? null }; });
+  const recentWinners = recent.map(r => { const d = decodeResultData(r.resultData); const p = d.winner ? recentMap.get(d.winner) : undefined; return { roundNumber: r.roundNumber, winnerId: d.winner ?? null, winnerUsername: p?.username ?? null, winnerPayout: d.winnerPayout ?? 0, timestamp: r.settledAt?.toISOString() ?? new Date().toISOString(), avatar: p?.avatarUrl || (p?.username?.charAt(0).toUpperCase() ?? "?") }; });
+  const historyRows = userId ? await db.gameBet.findMany({
+    where: { userId, round: { gameType: "spin_battle" } },
+    orderBy: { placedAt: "desc" },
+    take: 100,
+    select: { amount: true, outcome: true, payout: true, placedAt: true, round: { select: { roundNumber: true, lobbyId: true } } },
+  }) : [];
+  const history = historyRows.map(h => ({
+    roundNumber: h.round.roundNumber, lobbyId: h.round.lobbyId, betAmount: Number(h.amount),
+    won: h.outcome === "win" ? true : h.outcome === "loss" ? false : null,
+    payout: Number(h.payout ?? 0), timestamp: h.placedAt.getTime(),
+  }));
   return {
     lobbyId, roundId: state.roundId, roundNumber: state.roundNumber, phase: state.phase,
     playerCount: state.players.length, maxPlayers: cfg.maxPlayers, minBet: cfg.minBet, maxBet: cfg.maxBet,
     totalPool, timeRemaining: remaining, winnerId: state.winnerId, winnerUsername: state.winnerId ? (usernameMap.get(state.winnerId) ?? null) : null,
     winnerPayout: state.winnerPayout, canJoin: ["waiting", "countdown"].includes(state.phase) && state.players.length < cfg.maxPlayers,
-    players: liveBets.map((bet, i) => { const amount=Number(bet.amount); const start=totalPool>0 ? liveBets.slice(0,i).reduce((sum,b)=>sum+Number(b.amount),0)/totalPool*360 : 0; const end=totalPool>0 ? liveBets.slice(0,i+1).reduce((sum,b)=>sum+Number(b.amount),0)/totalPool*360 : 360/(liveBets.length||1)*(i+1); const colors=["#FF0000","#0066FF","#00CC44","#FFD700","#FF8C00","#9400D3","#FF1493","#00FFFF","#FF6347","#ADFF2F","#8B4513","#4169E1"]; return { userId: bet.userId, username: usernameMap.get(bet.userId) ?? `Player ${i + 1}`, index: i, avatar: avatarMap.get(bet.userId) ?? null, betAmount: amount, color: colors[i % colors.length], segmentStart: start, segmentEnd: end, probability: totalPool>0 ? amount/totalPool*100 : 0 }; }),
+    players: liveBets.map((bet, i) => { const amount=Number(bet.amount); const start=totalPool>0 ? liveBets.slice(0,i).reduce((sum,b)=>sum+Number(b.amount),0)/totalPool*360 : 0; const end=totalPool>0 ? liveBets.slice(0,i+1).reduce((sum,b)=>sum+Number(b.amount),0)/totalPool*360 : 360/(liveBets.length||1)*(i+1); const colors=["#FF0000","#0066FF","#00CC44","#FFD700","#FF8C00","#9400D3","#FF1493","#00FFFF","#FF6347","#ADFF2F","#8B4513","#4169E1"]; return { userId: bet.userId, username: usernameMap.get(bet.userId) ?? `Player ${i + 1}`, index: i, avatar: avatarMap.get(bet.userId) || (usernameMap.get(bet.userId)?.charAt(0).toUpperCase() ?? "?"), betAmount: amount, color: colors[i % colors.length], segmentStart: start, segmentEnd: end, probability: totalPool>0 ? amount/totalPool*100 : 0 }; }),
     myBet: userId ? { inRound: !!myBet, amount: myBet ? Number(myBet.amount) : null } : null,
+    history,
     recentWinners, serverSeedHash: state.serverSeedHash, verificationId: (await db.gameRound.findUnique({ where: { id: state.roundId }, select: { verificationId: true } }))?.verificationId ?? null,
   };
 }
@@ -252,8 +264,14 @@ export async function joinSpinLobby(userId: string, lobbyId: string, betAmount: 
   const roundId = state.roundId;
   await db.$transaction(async tx => {
     await tx.$queryRaw`SELECT id FROM game_rounds WHERE id = ${roundId} FOR UPDATE`;
-    const round = await tx.gameRound.findUnique({ where: { id: roundId }, select: { status: true } });
+    const round = await tx.gameRound.findUnique({ where: { id: roundId }, select: { status: true, resultData: true } });
     if (!round || !["waiting", "countdown"].includes(round.status)) throw Object.assign(new Error("Betting is closed"), { statusCode: 409, code: "BETTING_CLOSED" });
+    if (round.status === "countdown") {
+      const countdownStartedAt = decodeResultData(round.resultData).countdownStartedAt;
+      if (countdownStartedAt && Date.now() - Number(countdownStartedAt) >= COUNTDOWN_MS - LOCK_BEFORE_MS) {
+        throw Object.assign(new Error("No more bets — the round is locked"), { statusCode: 409, code: "BETTING_CLOSED" });
+      }
+    }
     const count = await tx.gameBet.count({ where: { roundId } });
     if (count >= cfg.maxPlayers) throw Object.assign(new Error("Lobby is full"), { statusCode: 409, code: "LOBBY_FULL" });
     const existing = await tx.gameBet.findFirst({ where: { roundId, userId } });
