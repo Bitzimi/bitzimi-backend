@@ -15,6 +15,7 @@ export const SPIN_LOBBY_CONFIG: Record<string, { minBet: number; maxBet: number;
 
 const COUNTDOWN_MS = 30_000;
 const LOCK_BEFORE_MS = 5_000;
+const SPIN_DURATION_MS = 8_000;
 const RESULT_MS = 8_000;
 const activeSpinTickers = new Set<string>();
 
@@ -101,7 +102,7 @@ async function finishSpinRound(lobbyId: string, roundId: string): Promise<void> 
   if (!round || round.status !== "spinning" || !round.serverSeed || !round.serverSeedHash) return;
   const data = decodeResultData(round.resultData);
   const spinStartedAt = Number(data.spinStartedAt ?? 0);
-  if (!spinStartedAt || Date.now() - spinStartedAt < 5_000) return;
+  if (!spinStartedAt || Date.now() - spinStartedAt < SPIN_DURATION_MS) return;
   const bets = await db.gameBet.findMany({ where: { roundId, settled: false } });
   if (!bets.length) return;
   const playerIds = Array.isArray(data.playerIds) ? data.playerIds : [...new Set(bets.map(b => b.userId))].sort();
@@ -117,7 +118,24 @@ async function finishSpinRound(lobbyId: string, roundId: string): Promise<void> 
     if (!guard.count) return;
     await settleSingleWinnerInTx(tx,{winnerId,loserIds,totalPool,platformFee:fee,winnerPayout,gameType:"spin_battle",roundId});
     const now=new Date();
-    for(const bet of bets){const amount=Number(bet.amount);const userFee=amount*feeRate;await tx.gameBet.update({where:{id:bet.id},data:{outcome:bet.userId===winnerId?"win":"loss",payout:bet.userId===winnerId?winnerPayout:0,platformFee:userFee,settled:true,settledAt:now}});await createGameFeeJobInTx(tx,{userId:bet.userId,userFee,isMultiGame:true,eventRefId:roundId});}
+    for(const bet of bets){
+      const amount=Number(bet.amount);
+      const userFee=amount*feeRate;
+      await tx.gameBet.update({where:{id:bet.id},data:{outcome:bet.userId===winnerId?"win":"loss",payout:bet.userId===winnerId?winnerPayout:0,platformFee:userFee,settled:true,settledAt:now}});
+      if (bet.userId !== winnerId) {
+        await writeLedgerEntry(tx, {
+          userId: bet.userId,
+          type: "game_loss",
+          fromWallet: "game",
+          amount,
+          description: "Spin Battle loss",
+          referenceId: roundId,
+          referenceType: "game_round",
+          metadata: { gameType: "spin_battle", lobbyId, roundId, roundNumber: round.roundNumber, betAmount: amount, outcome: "loss" },
+        });
+      }
+      await createGameFeeJobInTx(tx,{userId:bet.userId,userFee,isMultiGame:true,eventRefId:roundId});
+    }
   });
 }
 
@@ -231,7 +249,7 @@ export async function joinSpinLobby(userId: string, lobbyId: string, betAmount: 
   const state = await ensureRound(lobbyId);
   if (!["waiting", "countdown"].includes(state.phase)) throw Object.assign(new Error(`Lobby ${lobbyId} is not accepting players — phase: ${state.phase}`), { statusCode: 409, code: "LOBBY_NOT_OPEN" });
 
-  let roundId = state.roundId;
+  const roundId = state.roundId;
   await db.$transaction(async tx => {
     await tx.$queryRaw`SELECT id FROM game_rounds WHERE id = ${roundId} FOR UPDATE`;
     const round = await tx.gameRound.findUnique({ where: { id: roundId }, select: { status: true } });
@@ -241,8 +259,7 @@ export async function joinSpinLobby(userId: string, lobbyId: string, betAmount: 
     const existing = await tx.gameBet.findFirst({ where: { roundId, userId } });
     if (existing) throw Object.assign(new Error("You are already in this lobby"), { statusCode: 409, code: "ALREADY_JOINED" });
     await debitWallet(tx, userId, "game", betAmount);
-    const bet = await tx.gameBet.create({ data: { roundId, userId, amount: betAmount, betData: JSON.stringify({ lobby: lobbyId, bet: betAmount }) } });
-    await writeLedgerEntry(tx, { userId, type: "game_bet", fromWallet: "game", amount: betAmount, description: "Spin battle bet", referenceId: bet.id, referenceType: "game_bet", metadata: { lobbyId, roundId } });
+    await tx.gameBet.create({ data: { roundId, userId, amount: betAmount, betData: JSON.stringify({ lobby: lobbyId, bet: betAmount }) } });
   });
 
   const after = await ensureRound(lobbyId);
