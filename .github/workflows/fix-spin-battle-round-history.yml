@@ -1,0 +1,105 @@
+name: Fix Spin Battle round history
+
+on:
+  push:
+    paths:
+      - '.github/workflows/fix-spin-battle-round-history.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch Spin Battle
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          path = Path('src/modules/games/spinBattle/spinBattle.service.ts')
+          s = path.read_text()
+
+          # 1) Spin animation must remain in spinning phase for the full 8 seconds.
+          s = s.replace('if (!spinStartedAt || Date.now() - spinStartedAt < 5_000) return;',
+                        'if (!spinStartedAt || Date.now() - spinStartedAt < 8_000) return;')
+
+          # 2) The bet itself debits the wallet, but must NOT create a Wallet transaction
+          #    until the round has actually settled.
+          s = s.replace('import { debitWallet, writeLedgerEntry } from "../../wallets/wallets.service";',
+                        'import { debitWallet, writeLedgerEntry } from "../../wallets/wallets.service";')
+          old_ledger = '''    const bet = await tx.gameBet.create({ data: { roundId, userId, amount: betAmount, betData: JSON.stringify({ lobby: lobbyId, bet: betAmount }) } });\n    await writeLedgerEntry(tx, { userId, type: "game_bet", fromWallet: "game", amount: betAmount, description: "Spin battle bet", referenceId: bet.id, referenceType: "game_bet", metadata: { lobbyId, roundId } });'''
+          new_ledger = '''    await tx.gameBet.create({ data: { roundId, userId, amount: betAmount, betData: JSON.stringify({ lobby: lobbyId, bet: betAmount }) } });'''
+          if old_ledger not in s:
+              raise SystemExit('join ledger block not found')
+          s = s.replace(old_ledger, new_ledger)
+
+          # 3) Do not accept a bet once the countdown has reached the final 5 seconds.
+          old_select = 'const round = await tx.gameRound.findUnique({ where: { id: roundId }, select: { status: true } });'
+          new_select = '''const round = await tx.gameRound.findUnique({ where: { id: roundId }, select: { status: true, resultData: true } });'''
+          if old_select not in s:
+              raise SystemExit('round select block not found')
+          s = s.replace(old_select, new_select, 1)
+          marker = '''    if (!round || !["waiting", "countdown"].includes(round.status)) throw Object.assign(new Error("Betting is closed"), { statusCode: 409, code: "BETTING_CLOSED" });\n    const count = await tx.gameBet.count({ where: { roundId } });'''
+          replacement = '''    if (!round || !["waiting", "countdown"].includes(round.status)) throw Object.assign(new Error("Betting is closed"), { statusCode: 409, code: "BETTING_CLOSED" });\n    if (round.status === "countdown") {\n      const countdownStartedAt = decodeResultData(round.resultData).countdownStartedAt;\n      if (countdownStartedAt && Date.now() - Number(countdownStartedAt) >= COUNTDOWN_MS - LOCK_BEFORE_MS) {\n        throw Object.assign(new Error("No more bets — the round is locked"), { statusCode: 409, code: "BETTING_CLOSED" });\n      }\n    }\n    const count = await tx.gameBet.count({ where: { roundId } });'''
+          if marker not in s:
+              raise SystemExit('betting lock marker not found')
+          s = s.replace(marker, replacement, 1)
+
+          # 4) Use the persisted per-user game bets as the source of truth for Your History.
+          marker = '''  const recentWinners = recent.map(r => { const d = decodeResultData(r.resultData); const p = d.winner ? recentMap.get(d.winner) : undefined; return { roundNumber: r.roundNumber, winnerId: d.winner ?? null, winnerUsername: p?.username ?? null, winnerPayout: d.winnerPayout ?? 0, timestamp: r.settledAt?.toISOString() ?? new Date().toISOString(), avatar: p?.avatarUrl ?? null }; });\n  return {'''
+          replacement = '''  const recentWinners = recent.map(r => { const d = decodeResultData(r.resultData); const p = d.winner ? recentMap.get(d.winner) : undefined; return { roundNumber: r.roundNumber, winnerId: d.winner ?? null, winnerUsername: p?.username ?? null, winnerPayout: d.winnerPayout ?? 0, timestamp: r.settledAt?.toISOString() ?? new Date().toISOString(), avatar: p?.avatarUrl ?? null }; });\n  const historyRows = userId ? await db.gameBet.findMany({\n    where: { userId, round: { gameType: "spin_battle" } },\n    orderBy: { placedAt: "desc" },\n    take: 100,\n    select: { amount: true, outcome: true, payout: true, placedAt: true, round: { select: { roundNumber: true, lobbyId: true } } },\n  }) : [];\n  const history = historyRows.map(h => ({\n    roundNumber: h.round.roundNumber,\n    lobbyId: h.round.lobbyId,\n    betAmount: Number(h.amount),\n    won: h.outcome === "win" ? true : h.outcome === "loss" ? false : null,\n    payout: Number(h.payout ?? 0),\n    timestamp: h.placedAt.getTime(),\n  }));\n  return {'''
+          if marker not in s:
+              raise SystemExit('history insertion marker not found')
+          s = s.replace(marker, replacement, 1)
+
+          # 5) Shared avatar data: every client receives the same persisted profile avatar.
+          #    If the platform identity has its normal initial avatar, mirror that exact
+          #    representation for other players instead of substituting a private identity.
+          old_player = 'avatar: avatarMap.get(bet.userId) ?? null, betAmount: amount,'
+          new_player = 'avatar: avatarMap.get(bet.userId) || (usernameMap.get(bet.userId)?.charAt(0).toUpperCase() ?? "?"), betAmount: amount,'
+          if old_player not in s:
+              raise SystemExit('player avatar block not found')
+          s = s.replace(old_player, new_player, 1)
+
+          old_winner_avatar = 'avatar: p?.avatarUrl ?? null }; });'
+          new_winner_avatar = 'avatar: p?.avatarUrl || (p?.username?.charAt(0).toUpperCase() ?? "?") }; });'
+          if old_winner_avatar not in s:
+              raise SystemExit('winner avatar block not found')
+          s = s.replace(old_winner_avatar, new_winner_avatar, 1)
+
+          # 6) Return persistent user history in the lobby snapshot.
+          marker = '    myBet: userId ? { inRound: !!myBet, amount: myBet ? Number(myBet.amount) : null } : null,\n    recentWinners,'
+          replacement = '    myBet: userId ? { inRound: !!myBet, amount: myBet ? Number(myBet.amount) : null } : null,\n    history,\n    recentWinners,'
+          if marker not in s:
+              raise SystemExit('snapshot history return marker not found')
+          s = s.replace(marker, replacement, 1)
+
+          # 7) Record a real loss transaction only after settlement. Winner already gets
+          #    the game_win transaction from settleSingleWinnerInTx.
+          marker = '''for(const bet of bets){const amount=Number(bet.amount);const userFee=amount*feeRate;await tx.gameBet.update({where:{id:bet.id},data:{outcome:bet.userId===winnerId?"win":"loss",payout:bet.userId===winnerId?winnerPayout:0,platformFee:userFee,settled:true,settledAt:now}});await createGameFeeJobInTx(tx,{userId:bet.userId,userFee,isMultiGame:true,eventRefId:roundId});}'''
+          replacement = '''for(const bet of bets){const amount=Number(bet.amount);const userFee=amount*feeRate;const isWinner=bet.userId===winnerId;await tx.gameBet.update({where:{id:bet.id},data:{outcome:isWinner?"win":"loss",payout:isWinner?winnerPayout:0,platformFee:userFee,settled:true,settledAt:now}});if(!isWinner){await writeLedgerEntry(tx,{userId:bet.userId,type:"game_loss",fromWallet:"game",amount,description:"Spin Battle loss",referenceId:roundId,referenceType:"game_round",metadata:{gameType:"spin_battle",lobby:lobbyId,roundId}});}await createGameFeeJobInTx(tx,{userId:bet.userId,userFee,isMultiGame:true,eventRefId:roundId});}'''
+          if marker not in s:
+              raise SystemExit('settlement loop not found')
+          s = s.replace(marker, replacement, 1)
+
+          path.write_text(s)
+
+      - name: Verify TypeScript syntax/build
+        run: |
+          npm ci
+          npm run build
+
+      - name: Commit and remove temporary workflow
+        shell: bash
+        run: |
+          rm -f .github/workflows/fix-spin-battle-round-history.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/modules/games/spinBattle/spinBattle.service.ts .github/workflows/fix-spin-battle-round-history.yml
+          git diff --cached --quiet && exit 0
+          git commit -m "fix: complete Spin Battle settlement and history flow"
+          git push
