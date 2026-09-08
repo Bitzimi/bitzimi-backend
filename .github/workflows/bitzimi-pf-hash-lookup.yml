@@ -1,0 +1,33 @@
+name: BitZimi one-time PF hash lookup fix
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Add hash lookup endpoint
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/modules/games/provablyFair.routes.ts')
+          s=p.read_text()
+          marker='''export async function provablyFairRoutes(app: FastifyInstance) {\n'''
+          insert='''export async function provablyFairRoutes(app: FastifyInstance) {\n  // Used only to recover the opaque Verification ID in the in-game modal.\n  // The ID remains the canonical lookup key for the exact stored game event.\n  app.get("/lookup-by-hash/:serverSeedHash", async (req, reply) => {\n    const { serverSeedHash } = req.params as { serverSeedHash: string };\n    if (!/^[a-f0-9]{64}$/i.test(serverSeedHash)) return reply.status(400).send({ error: "Invalid server seed hash" });\n    const [gameRound, diceRound, pvpMatch] = await Promise.all([\n      db.gameRound.findFirst({ where: { serverSeedHash }, select: { verificationId: true, gameType: true } }),\n      db.diceRound.findFirst({ where: { serverSeedHash }, select: { verificationId: true, gameType: true } }),\n      db.pvpMatch.findFirst({ where: { serverSeedHash }, select: { verificationId: true, gameType: true } }),\n    ]);\n    const found = gameRound ?? diceRound ?? pvpMatch;\n    if (!found?.verificationId) return reply.status(404).send({ error: "Verification ID not found" });\n    return reply.send({ ok: true, data: { verificationId: found.verificationId, gameType: found.gameType } });\n  });\n'''
+          if marker not in s: raise SystemExit('route marker not found')
+          if 'lookup-by-hash/:serverSeedHash' not in s: s=s.replace(marker,insert,1)
+          p.write_text(s)
+          PY
+      - name: Remove workflow
+        run: rm -f .github/workflows/bitzimi-pf-hash-lookup.yml
+      - name: Commit and push
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/modules/games/provablyFair.routes.ts .github/workflows/bitzimi-pf-hash-lookup.yml
+          git commit -m 'Add verification ID recovery endpoint' || exit 0
+          git push
