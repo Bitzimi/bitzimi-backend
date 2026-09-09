@@ -44,10 +44,17 @@ export async function getGameStats(userId: string) {
 
 // ── Game history (recent bets) ────────────────────────────────────────────────
 
-export async function getGameHistory(userId: string, opts: { cursor?: string; limit?: number; gameType?: string }) {
-  const { cursor, limit = 20, gameType } = opts;
+export async function getGameHistory(
+  userId: string,
+  opts: { cursor?: string; limit?: number; gameType?: string; lobbyId?: string }
+) {
+  const { cursor, limit = 20, gameType, lobbyId } = opts;
   const where: any = { userId };
-  if (gameType) where.round = { gameType };
+  if (gameType || lobbyId) {
+    where.round = {};
+    if (gameType) where.round.gameType = gameType;
+    if (lobbyId) where.round.lobbyId = lobbyId;
+  }
   if (cursor) {
     const anchor = await db.gameBet.findUnique({ where: { id: cursor } });
     if (anchor) where.placedAt = { lt: anchor.placedAt };
