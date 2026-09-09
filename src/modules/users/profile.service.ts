@@ -2,18 +2,16 @@
  * Profile Service — backend-authoritative user profile management.
  *
  * Covers:
- *   • Avatar upload (base64 → object storage → avatarUrl)
+ *   • Avatar upload (base64 data URL → durable profile storage)
  *   • Username update with 30-day rate limiting
  *   • Phone number update (after frontend OTP verification)
  *   • Address management (locked after KYC verification)
  *   • Full profile read (aggregating all sources)
  */
 import { db } from "../../db";
-import { storeDocument } from "../kyc/storage";
 
 const USERNAME_EDIT_COOLDOWN_DAYS = 30;
-
-// ── Full profile read ─────────────────────────────────────────────────────────
+const MAX_AVATAR_BYTES = 700 * 1024;
 
 export async function getFullProfile(userId: string) {
   const profile = await db.userProfile.findUnique({ where: { userId } });
@@ -47,29 +45,33 @@ export async function getFullProfile(userId: string) {
   };
 }
 
-// ── Avatar upload ─────────────────────────────────────────────────────────────
-
 export async function uploadAvatar(userId: string, dataUrl: string) {
   if (!dataUrl.startsWith("data:image/")) {
     throw Object.assign(new Error("Invalid image format"), { statusCode: 400, code: "INVALID_IMAGE" });
   }
 
-  const stored = await storeDocument(dataUrl, `avatars/${userId}`);
+  const comma = dataUrl.indexOf(",");
+  const encoded = comma >= 0 ? dataUrl.slice(comma + 1) : "";
+  const bytes = Buffer.byteLength(encoded, "base64");
+  if (!bytes || bytes > MAX_AVATAR_BYTES) {
+    throw Object.assign(new Error("Avatar image is too large. Please use an image under 700 KB."), { statusCode: 413, code: "AVATAR_TOO_LARGE" });
+  }
+
+  // Keep the canonical avatar in the user profile itself. This avoids the old
+  // local-filesystem storage-key problem where the UI replaced a working image
+  // with a UUID/path such as /uploads/<id> that other users could not resolve.
   await db.userProfile.update({
     where: { userId },
-    data: { avatarUrl: stored.url },
+    data: { avatarUrl: dataUrl },
   });
 
-  return { avatarUrl: stored.url };
+  return { avatarUrl: dataUrl };
 }
-
-// ── Username update (30-day rate limit) ──────────────────────────────────────
 
 export async function updateUsername(userId: string, newUsername: string) {
   const profile = await db.userProfile.findUnique({ where: { userId } });
   if (!profile) throw Object.assign(new Error("Profile not found"), { statusCode: 404 });
 
-  // Enforce 30-day cooldown
   if (profile.lastUsernameEdit) {
     const daysSince = (Date.now() - profile.lastUsernameEdit.getTime()) / 86400000;
     if (daysSince < USERNAME_EDIT_COOLDOWN_DAYS) {
@@ -81,7 +83,6 @@ export async function updateUsername(userId: string, newUsername: string) {
     }
   }
 
-  // Check uniqueness
   const taken = await db.userProfile.findFirst({ where: { username: newUsername, userId: { not: userId } } });
   if (taken) throw Object.assign(new Error("Username already taken"), { statusCode: 409, code: "USERNAME_TAKEN" });
 
@@ -91,56 +92,31 @@ export async function updateUsername(userId: string, newUsername: string) {
   });
 }
 
-// ── Phone update (called after frontend OTP verification passes) ──────────────
-
-export async function updatePhone(userId: string, input: {
-  phoneNumber:   string;
-  phoneVerified: boolean;
-}) {
+export async function updatePhone(userId: string, input: { phoneNumber:string; phoneVerified:boolean }) {
   await db.userProfile.update({
     where: { userId },
-    data: {
-      phoneNumber:   input.phoneNumber,
-      phoneVerified: input.phoneVerified,
-    },
+    data: { phoneNumber: input.phoneNumber, phoneVerified: input.phoneVerified },
   });
 }
 
-// ── Address update (locked after KYC verification) ────────────────────────────
-
-export async function updateAddress(userId: string, input: {
-  street:     string;
-  city:       string;
-  state?:     string;
-  country:    string;
-  postalCode?: string;
-}) {
+export async function updateAddress(userId: string, input: { street:string; city:string; state?:string; country:string; postalCode?:string }) {
   const profile = await db.userProfile.findUnique({ where: { userId } });
   if (!profile) throw Object.assign(new Error("Profile not found"), { statusCode: 404 });
-
   if (profile.addressLockedByVerification) {
-    throw Object.assign(
-      new Error("Address is locked after identity verification and cannot be changed."),
-      { statusCode: 403, code: "ADDRESS_LOCKED" }
-    );
+    throw Object.assign(new Error("Address is locked after identity verification and cannot be changed."), { statusCode: 403, code: "ADDRESS_LOCKED" });
   }
-
   await db.userProfile.update({
     where: { userId },
     data: {
-      addressStreet:    input.street,
-      addressCity:      input.city,
-      addressState:     input.state    ?? null,
-      addressCountry:   input.country,
-      addressPostalCode:input.postalCode ?? null,
+      addressStreet: input.street,
+      addressCity: input.city,
+      addressState: input.state ?? null,
+      addressCountry: input.country,
+      addressPostalCode: input.postalCode ?? null,
     },
   });
 }
 
-/** Called by admin KYC approval — locks the address permanently. */
 export async function lockAddressAfterVerification(userId: string) {
-  await db.userProfile.update({
-    where: { userId },
-    data: { addressLockedByVerification: true },
-  });
+  await db.userProfile.update({ where: { userId }, data: { addressLockedByVerification: true } });
 }
