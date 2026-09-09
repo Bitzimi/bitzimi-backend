@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc --project tsconfig.json",
+    "build": "npx prisma migrate resolve --rolled-back 20260909120000_spin_battle_round_sequence_guard && tsc --project tsconfig.json",
     "start": "node dist/index.js",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
@@ -20,7 +20,7 @@
     "bcryptjs": "^2.4.3",
     "fastify": "^4.28.1",
     "jsonwebtoken": "^9.0.2",
-    "nodemailer": "^9.0.3",
+    "nodemailer": "^9.0.1",
     "otplib": "^13.4.1",
     "qrcode": "^1.5.4",
     "uuid": "^9.0.1",
