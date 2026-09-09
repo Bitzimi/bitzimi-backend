@@ -10,34 +10,31 @@ DECLARE
 BEGIN
   FOR lobby IN
     SELECT DISTINCT lobby_id
-    FROM game_round
+    FROM game_rounds
     WHERE game_type = 'spin_battle'
       AND lobby_id IS NOT NULL
   LOOP
     SELECT MAX(round_number)
       INTO active_round
-    FROM game_round
+    FROM game_rounds
     WHERE game_type = 'spin_battle'
       AND lobby_id = lobby
       AND status IN ('waiting','countdown','locked','spinning','result');
 
-    -- A completed round ahead of the active round with no bets is an orphan
-    -- created by the old race condition. Keep the row for auditability but
-    -- prevent it from appearing as a recent winner.
     IF active_round IS NOT NULL THEN
-      UPDATE game_round r
+      UPDATE game_rounds r
       SET status = 'cancelled'
       WHERE r.game_type = 'spin_battle'
         AND r.lobby_id = lobby
         AND r.status = 'completed'
         AND r.round_number > active_round
         AND NOT EXISTS (
-          SELECT 1 FROM game_bet b WHERE b.round_id = r.id
+          SELECT 1 FROM game_bets b WHERE b.round_id = r.id
         );
     END IF;
   END LOOP;
 END $$;
 
-CREATE UNIQUE INDEX IF NOT EXISTS game_round_spin_battle_lobby_round_unique
-  ON game_round (lobby_id, round_number)
+CREATE UNIQUE INDEX IF NOT EXISTS game_rounds_spin_battle_lobby_round_unique
+  ON game_rounds (lobby_id, round_number)
   WHERE game_type = 'spin_battle';
