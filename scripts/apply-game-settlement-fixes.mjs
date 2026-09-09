@@ -3,36 +3,27 @@ import fs from "node:fs";
 function read(path) { return fs.readFileSync(path, "utf8"); }
 function write(path, text) { fs.writeFileSync(path, text); }
 
-// 1) 1v1 matches: debit the game wallet when the match is created, but DO NOT
-// create a game_bet transaction. Final history is written only by settlement.
 {
   const path = "src/modules/games/matchmaking/matchmaking.service.ts";
   let s = read(path);
-  const old = 'const match = await db.$transaction(async tx => { for (const pid of [player1Id, player2Id]) { await debitWallet(tx, pid, "game", stake); await writeLedgerEntry(tx, { userId: pid, type: "game_bet", fromWallet: "game", amount: stake, description: `${gameType} match entry`, referenceType: "pvp_match", metadata: { gameType, stake } }); } return tx.pvpMatch.create({ data: { gameType, stake, player1Id, player2Id, serverSeedHash, verificationId } }); });';
-  const neu = 'const match = await db.$transaction(async tx => { for (const pid of [player1Id, player2Id]) { await debitWallet(tx, pid, "game", stake); } return tx.pvpMatch.create({ data: { gameType, stake, player1Id, player2Id, serverSeedHash, verificationId } }); });';
-  if (s.includes(old)) s = s.replace(old, neu);
+  const oldBet = 'const match = await db.$transaction(async tx => { for (const pid of [player1Id, player2Id]) { await debitWallet(tx, pid, "game", stake); await writeLedgerEntry(tx, { userId: pid, type: "game_bet", fromWallet: "game", amount: stake, description: `${gameType} match entry`, referenceType: "pvp_match", metadata: { gameType, stake } }); } return tx.pvpMatch.create({ data: { gameType, stake, player1Id, player2Id, serverSeedHash, verificationId } }); });';
+  const newBet = 'const match = await db.$transaction(async tx => { for (const pid of [player1Id, player2Id]) { await debitWallet(tx, pid, "game", stake); } return tx.pvpMatch.create({ data: { gameType, stake, player1Id, player2Id, serverSeedHash, verificationId } }); });';
+  if (s.includes(oldBet)) s = s.replace(oldBet, newBet);
   s = s.replace('const QUEUE_TTL_MS = 60_000;', 'const QUEUE_TTL_MS = 5 * 60_000;');
-  s = s.replace('profile:{select:{username:true}}', 'profile:{select:{username:true,avatarUrl:true}}');
+  const profilePair = 'player1:{include:{profile:{select:{username:true}}}},player2:{include:{profile:{select:{username:true}}}}';
+  const profilePairWithAvatar = 'player1:{include:{profile:{select:{username:true,avatarUrl:true}}}},player2:{include:{profile:{select:{username:true,avatarUrl:true}}}}';
+  if (s.includes(profilePair)) s = s.replace(profilePair, profilePairWithAvatar);
   s = s.replace('opponent:{username:opponent.profile?.username??"Player",userId:opponent.id}', 'opponent:{username:opponent.profile?.username??"Player",userId:opponent.id,avatar:opponent.profile?.avatarUrl??null}');
   write(path, s);
 }
 
-// 2) Dice Royale / Arena: joining debits the wallet but does not create a
-// transaction-history row. Settlement writes the final result transaction.
-for (const path of [
-  "src/modules/games/diceRoyale/diceRoyale.service.ts",
-  "src/modules/games/diceArena/diceArena.service.ts",
-]) {
+for (const path of ["src/modules/games/diceRoyale/diceRoyale.service.ts", "src/modules/games/diceArena/diceArena.service.ts"]) {
   let s = read(path);
-  const patterns = [
-    /\n\s*await writeLedgerEntry\(tx, \{ userId, type: "game_bet", fromWallet: "game", amount: stake,\n\s*description: `Dice royale entry — stake \$\{stake\}`, referenceType: "game_round",\n\s*metadata: \{ roundId: state\.roundId, stake \} \}\);/,
-    /\n\s*await writeLedgerEntry\(tx, \{ userId, type: "game_bet", fromWallet: "game", amount: stake,\n\s*description: `Dice arena entry — stake \$\{stake\}`, referenceType: "game_round",\n\s*metadata: \{ roundId: state\.roundId, stake \} \}\);/,
-  ];
-  for (const re of patterns) s = s.replace(re, "");
+  s = s.replace(/\n\s*await writeLedgerEntry\(tx, \{ userId, type: "game_bet", fromWallet: "game", amount: stake,\n\s*description: `Dice royale entry — stake \$\{stake\}`, referenceType: "game_round",\n\s*metadata: \{ roundId: state\.roundId, stake \} \}\);/, "");
+  s = s.replace(/\n\s*await writeLedgerEntry\(tx, \{ userId, type: "game_bet", fromWallet: "game", amount: stake,\n\s*description: `Dice arena entry — stake \$\{stake\}`, referenceType: "game_round",\n\s*metadata: \{ roundId: state\.roundId, stake \} \}\);/, "");
   write(path, s);
 }
 
-// 3) Focused waiting-queue index for gameType + stake + status + creation order.
 {
   const path = "prisma/schema.prisma";
   let s = read(path);
@@ -42,8 +33,6 @@ for (const path of [
   write(path, s);
 }
 
-// 4) Spin Battle snapshot exposes the same authoritative fee rate used by
-// settlement, allowing the frontend to show exact decimal potential payouts.
 {
   const path = "src/modules/games/spinBattle/spinBattle.service.ts";
   let s = read(path);
