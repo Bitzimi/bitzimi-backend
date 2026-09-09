@@ -11,8 +11,6 @@ export async function joinCoinFlipQueueIdempotent(userId: string, stake: number)
   const now = new Date();
 
   const prepared = await db.$transaction(async tx => {
-    // pg_advisory_xact_lock returns void. Use executeRaw so Prisma does not
-    // attempt to deserialize a void result into a query result object.
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`${userId}:pvp_coinflip`}))`;
 
     const [enabled, maintenance, configuredStakes] = await Promise.all([
@@ -100,19 +98,26 @@ export async function recoverCoinFlipQueue(userId: string, requestedStake: numbe
   void requestedStake;
   const now = new Date();
 
-  const activeMatch = await db.pvpMatch.findFirst({
-    where: { gameType: "pvp_coinflip", status: "active", OR: [{ player1Id: userId }, { player2Id: userId }] },
+  // A matched queue entry is the durable recovery pointer. It remains valid for
+  // the paid queue lease even after the match has already settled, which lets a
+  // browser reload into the current match/result instead of creating a new paid
+  // search after the original match has already been found.
+  const matchedQueue = await db.matchmakingQueue.findFirst({
+    where: { userId, gameType: "pvp_coinflip", status: "matched", expiresAt: { gt: now }, matchId: { not: null } },
     orderBy: { createdAt: "desc" },
-    select: { id: true, stake: true },
+    select: { id: true, matchId: true, stake: true },
   });
-  if (activeMatch) {
-    const queue = await db.matchmakingQueue.findFirst({ where: { userId, gameType: "pvp_coinflip", matchId: activeMatch.id }, orderBy: { createdAt: "desc" }, select: { id: true } });
-    return { status: "matched" as const, queueId: queue?.id ?? "", matchId: activeMatch.id, stake: Number(activeMatch.stake) };
+  if (matchedQueue?.matchId) {
+    const match = await db.pvpMatch.findFirst({ where: { id: matchedQueue.matchId, gameType: "pvp_coinflip", OR: [{ player1Id: userId }, { player2Id: userId }] }, select: { id: true, stake: true, status: true } });
+    if (match && (match.status === "active" || match.status === "settled")) {
+      return { status: "matched" as const, queueId: matchedQueue.id, matchId: match.id, stake: Number(match.stake) };
+    }
   }
 
   const entry = await db.matchmakingQueue.findFirst({
     where: { userId, gameType: "pvp_coinflip", status: "reserved", expiresAt: { gt: now } },
     orderBy: { createdAt: "desc" },
+    select: { id: true, stake: true },
   });
 
   if (!entry) return { status: "cancelled" as const };
