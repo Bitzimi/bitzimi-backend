@@ -201,6 +201,7 @@ async function buildLobbySnapshot(lobbyId: string, state: SpinLobbyState, userId
   const avatarMap = new Map(profiles.map(p => [p.userId, p.avatarUrl]));
   const liveBets = await db.gameBet.findMany({ where: { roundId: state.roundId }, orderBy: { placedAt: "asc" } });
   const totalPool = liveBets.reduce((sum, b) => sum + Number(b.amount), 0);
+  const feeRate = await getGameFeeRate("spin_battle");
   const myBet = userId ? liveBets.find(b => b.userId === userId) : undefined;
   const recent = await db.gameRound.findMany({ where: { gameType: "spin_battle", lobbyId, status: "completed", resultData: { not: null } }, orderBy: { roundNumber: "desc" }, take: 10, select: { roundNumber: true, resultData: true, settledAt: true } });
   const recentWinnerIds = recent.map(r => decodeResultData(r.resultData).winner).filter(Boolean);
@@ -221,7 +222,7 @@ async function buildLobbySnapshot(lobbyId: string, state: SpinLobbyState, userId
   return {
     lobbyId, roundId: state.roundId, roundNumber: state.roundNumber, phase: state.phase,
     playerCount: state.players.length, maxPlayers: cfg.maxPlayers, minBet: cfg.minBet, maxBet: cfg.maxBet,
-    totalPool, timeRemaining: remaining, winnerId: state.winnerId, winnerUsername: state.winnerId ? (usernameMap.get(state.winnerId) ?? null) : null,
+    totalPool, feeRate, timeRemaining: remaining, winnerId: state.winnerId, winnerUsername: state.winnerId ? (usernameMap.get(state.winnerId) ?? null) : null,
     winnerPayout: state.winnerPayout, canJoin: ["waiting", "countdown"].includes(state.phase) && state.players.length < cfg.maxPlayers,
     players: liveBets.map((bet, i) => { const amount=Number(bet.amount); const start=totalPool>0 ? liveBets.slice(0,i).reduce((sum,b)=>sum+Number(b.amount),0)/totalPool*360 : 0; const end=totalPool>0 ? liveBets.slice(0,i+1).reduce((sum,b)=>sum+Number(b.amount),0)/totalPool*360 : 360/(liveBets.length||1)*(i+1); const colors=["#FF0000","#0066FF","#00CC44","#FFD700","#FF8C00","#9400D3","#FF1493","#00FFFF","#FF6347","#ADFF2F","#8B4513","#4169E1"]; return { userId: bet.userId, username: usernameMap.get(bet.userId) ?? `Player ${i + 1}`, index: i, avatar: avatarMap.get(bet.userId) || (usernameMap.get(bet.userId)?.charAt(0).toUpperCase() ?? "?"), betAmount: amount, color: colors[i % colors.length], segmentStart: start, segmentEnd: end, probability: totalPool>0 ? amount/totalPool*100 : 0 }; }),
     myBet: userId ? { inRound: !!myBet, amount: myBet ? Number(myBet.amount) : null } : null,
