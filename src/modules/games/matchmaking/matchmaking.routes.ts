@@ -14,13 +14,11 @@ export async function matchmakingRoutes(app: FastifyInstance) {
     const raw = body.gameType === "pvp_coinflip"
       ? await joinCoinFlipQueueIdempotent(req.user.sub, body.stake)
       : await joinQueue(req.user.sub, body.gameType, body.stake);
-    const data = "kind" in raw
-      ? raw.kind === "matched"
+    const data = "status" in raw
+      ? raw
+      : raw.kind === "matched"
         ? { status: "matched" as const, queueId: raw.queueId, matchId: raw.matchId }
-        : raw.kind === "waiting"
-          ? { status: "waiting" as const, queueId: raw.queueId }
-          : { status: "matched" as const, queueId: raw.queueId, matchId: raw.matchId }
-      : raw;
+        : { status: "waiting" as const, queueId: raw.queueId };
     return reply.status(data.status === "matched" ? 200 : 202).send({ data });
   });
 
