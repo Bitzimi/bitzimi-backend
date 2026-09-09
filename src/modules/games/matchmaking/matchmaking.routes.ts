@@ -2,6 +2,7 @@ import { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { authenticate } from "../../../middleware/authenticate";
 import { joinQueue, getQueueStatus, leaveQueue, getMatch, signalReady, submitTap, MatchGameType } from "./matchmaking.service";
+import { joinCoinFlipQueueIdempotent } from "./coinflip-matchmaking.service";
 
 const VALID_GAME_TYPES: MatchGameType[] = ["dice_clash", "pvp_coinflip", "reaction_tap"];
 
@@ -14,7 +15,9 @@ export async function matchmakingRoutes(app: FastifyInstance) {
       gameType: z.enum(["dice_clash", "pvp_coinflip", "reaction_tap"]),
       stake:    z.number().positive(),
     }).parse(req.body);
-    const data = await joinQueue(req.user.sub, body.gameType, body.stake);
+    const data = body.gameType === "pvp_coinflip"
+      ? await joinCoinFlipQueueIdempotent(req.user.sub, body.stake)
+      : await joinQueue(req.user.sub, body.gameType, body.stake);
     return reply.status(data.status === "matched" ? 200 : 202).send({ data });
   });
 
