@@ -1,0 +1,75 @@
+name: Coin Flip Recovery Fix
+
+on:
+  push:
+    paths:
+      - 'src/modules/games/matchmaking/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch matchmaking recovery and idempotency
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('src/modules/games/matchmaking/matchmaking.service.ts')
+          s = p.read_text()
+
+          old = '''  const activeMatch = await db.pvpMatch.findFirst({ where: { gameType, status: "active", OR: [{ player1Id: userId }, { player2Id: userId }] } });
+  if (activeMatch) { const entry = await db.matchmakingQueue.findFirst({ where: { userId, gameType, matchId: activeMatch.id } }); return { status: "matched" as const, queueId: entry?.id ?? "", matchId: activeMatch.id }; }
+  const now = new Date();'''
+          new = '''  const now = new Date();
+  // Idempotency/recovery: an existing matched queue belongs to the same paid search.
+  // Never debit again just because the browser reloaded or another tab called joinQueue.
+  const existingMatched = await db.matchmakingQueue.findFirst({ where: { userId, gameType, status: "matched", matchId: { not: null }, expiresAt: { gt: now } }, orderBy: { createdAt: "desc" } });
+  if (existingMatched?.matchId) return { status: "matched" as const, queueId: existingMatched.id, matchId: existingMatched.matchId };
+  const activeMatch = await db.pvpMatch.findFirst({ where: { gameType, status: "active", OR: [{ player1Id: userId }, { player2Id: userId }] } });
+  if (activeMatch) { const entry = await db.matchmakingQueue.findFirst({ where: { userId, gameType, matchId: activeMatch.id } }); return { status: "matched" as const, queueId: entry?.id ?? "", matchId: activeMatch.id }; }'''
+          if old in s:
+              s = s.replace(old, new, 1)
+
+          old = '''  const existing = await db.matchmakingQueue.findFirst({ where: { userId, gameType, stake, status: { in: ["reserved", "waiting"] }, expiresAt: { gt: now } } });
+  if (existing) {
+    if (existing.status === "reserved") return { status: "waiting" as const, queueId: existing.id };
+    await db.$transaction(async tx => { await debitWallet(tx, userId, "game", stake); const claimed = await tx.matchmakingQueue.updateMany({ where: { id: existing.id, status: "waiting" }, data: { status: "reserved", expiresAt: new Date(Date.now() + QUEUE_TTL_MS) } }); if (!claimed.count) throw Object.assign(new Error("Queue state changed; please search again"), { statusCode: 409, code: "QUEUE_STATE_CHANGED" }); });
+    return { status: "waiting" as const, queueId: existing.id };
+  }'''
+          new = '''  // One paid public search per user/game. If a live reservation already exists,
+  // return it unchanged. The stake was already debited when that reservation was created.
+  const existing = await db.matchmakingQueue.findFirst({ where: { userId, gameType, status: { in: ["reserved", "waiting"] }, expiresAt: { gt: now } }, orderBy: { createdAt: "desc" } });
+  if (existing) return { status: "waiting" as const, queueId: existing.id };'''
+          if old in s:
+              s = s.replace(old, new, 1)
+
+          p.write_text(s)
+
+          r = Path('src/modules/games/matchmaking/matchmaking.routes.ts')
+          rs = r.read_text()
+          rs = rs.replace('import { joinQueue, getQueueStatus, leaveQueue, getMatch, signalReady, submitTap, MatchGameType } from "./matchmaking.service";', 'import { joinQueue, getQueueStatus, leaveQueue, getMatch, signalReady, submitTap, MatchGameType } from "./matchmaking.service";')
+          r.write_text(rs)
+
+          if 'Idempotency/recovery' not in s:
+              raise SystemExit('Expected matchmaking patch was not applied')
+          if 'One paid public search per user/game' not in s:
+              raise SystemExit('Expected duplicate-debit guard was not applied')
+
+      - name: Build backend
+        run: npm ci && npm run build
+
+      - name: Commit patched source
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/modules/games/matchmaking/matchmaking.service.ts
+          if git diff --cached --quiet; then
+            echo 'No source changes needed.'
+          else
+            git commit -m 'fix: make coin flip matchmaking idempotent and recoverable'
+            git push
+          fi
