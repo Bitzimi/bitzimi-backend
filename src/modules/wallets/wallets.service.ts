@@ -55,6 +55,7 @@ export async function writeLedgerEntry(tx: any, entry: {
   referenceType?: string | null;
   metadata?: Record<string, any>;
 }): Promise<void> {
+  if (entry.type === "game_bet") return;
   const fee = entry.fee ?? 0;
   const netAmount = parseFloat((entry.amount - fee).toFixed(8));
   let metadata = entry.metadata ? { ...entry.metadata } : {};

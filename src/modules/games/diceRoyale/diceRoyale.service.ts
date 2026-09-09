@@ -293,9 +293,6 @@ export async function joinRoyaleRound(userId: string, stake: number) {
         throw Object.assign(new Error("Insufficient game wallet balance"), { statusCode: 400, code: "INSUFFICIENT_BALANCE" });
       }
       await debitWallet(tx, userId, "game", stake);
-      await writeLedgerEntry(tx, { userId, type: "game_bet", fromWallet: "game", amount: stake,
-        description: `Dice royale entry — stake ${stake}`, referenceType: "game_round",
-        metadata: { roundId: state.roundId, stake } });
       // Update playerIds in DB atomically with wallet deduction
       const newIds = [...existingIds, userId];
       await tx.diceRound.update({ where: { id: state.roundId }, data: { playerIds: JSON.stringify(newIds) } });

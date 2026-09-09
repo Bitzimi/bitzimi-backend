@@ -268,9 +268,6 @@ export async function joinArenaRound(userId: string, stake: number) {
       }
 
       await debitWallet(tx, userId, "game", stake);
-      await writeLedgerEntry(tx, { userId, type: "game_bet", fromWallet: "game", amount: stake,
-        description: `Dice arena entry — stake ${stake}`, referenceType: "game_round",
-        metadata: { roundId: state.roundId, stake } });
 
       const newIds = [...existingIds, userId];
       await tx.diceRound.update({ where: { id: state.roundId }, data: { playerIds: JSON.stringify(newIds) } });

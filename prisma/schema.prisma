@@ -554,6 +554,7 @@ model MatchmakingQueue {
   match PvpMatch? @relation("QueueMatch", fields: [matchId], references: [id])
 
   @@index([gameType, stake, status])
+  @@index([gameType, stake, status, createdAt])
   @@map("matchmaking_queues")
 }
 
