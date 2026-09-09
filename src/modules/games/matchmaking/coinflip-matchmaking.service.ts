@@ -11,10 +11,9 @@ export async function joinCoinFlipQueueIdempotent(userId: string, stake: number)
   const now = new Date();
 
   const prepared = await db.$transaction(async tx => {
-    // pg_advisory_xact_lock returns PostgreSQL's pseudo-type `void`. Prisma cannot
-    // deserialize a void result from $queryRaw, so explicitly cast it to text.
-    // The cast preserves the lock while giving Prisma a supported scalar result.
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`${userId}:pvp_coinflip`}))::text`;
+    // pg_advisory_xact_lock returns void. Use executeRaw so Prisma does not
+    // attempt to deserialize a void result into a query result object.
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`${userId}:pvp_coinflip`}))`;
 
     const [enabled, maintenance, configuredStakes] = await Promise.all([
       getConfigValue<boolean>("game." + gameType + ".enabled", true),
@@ -25,9 +24,6 @@ export async function joinCoinFlipQueueIdempotent(userId: string, stake: number)
     if (maintenance) throw Object.assign(new Error("pvp_coinflip is under maintenance"), { statusCode: 503, code: "GAME_MAINTENANCE" });
     if (configuredStakes.length && !configuredStakes.includes(stake)) throw Object.assign(new Error(`Stake $${stake} is not available for this game`), { statusCode: 400, code: "INVALID_STAKE" });
 
-    // A live match is the strongest source of truth. Do not require the queue
-    // lease to still be unexpired: a browser can disappear while the match keeps
-    // running, and the player must be able to return without another debit.
     const activeMatch = await tx.pvpMatch.findFirst({
       where: { gameType, status: "active", OR: [{ player1Id: userId }, { player2Id: userId }] },
       orderBy: { createdAt: "desc" },
@@ -99,12 +95,7 @@ export async function joinCoinFlipQueueIdempotent(userId: string, stake: number)
   return { status: "matched" as const, queueId: mine.id, matchId: match.id };
 }
 
-/**
- * Read-only recovery. This function can never create a queue or debit a wallet.
- * It first recovers an actually active match directly from the match table, so
- * recovery still works if the queue lease expired while the browser was away.
- * Waiting searches are recovered only while their paid queue lease is valid.
- */
+/** Read-only recovery: it can never create a queue or debit a wallet. */
 export async function recoverCoinFlipQueue(userId: string, requestedStake: number) {
   void requestedStake;
   const now = new Date();
