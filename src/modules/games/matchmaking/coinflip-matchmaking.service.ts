@@ -11,7 +11,10 @@ export async function joinCoinFlipQueueIdempotent(userId: string, stake: number)
   const now = new Date();
 
   const prepared = await db.$transaction(async tx => {
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`${userId}:pvp_coinflip`}))`;
+    // pg_advisory_xact_lock returns PostgreSQL's pseudo-type `void`. Prisma cannot
+    // deserialize a void result from $queryRaw, so explicitly cast it to text.
+    // The cast preserves the lock while giving Prisma a supported scalar result.
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`${userId}:pvp_coinflip`}))::text`;
 
     const [enabled, maintenance, configuredStakes] = await Promise.all([
       getConfigValue<boolean>("game." + gameType + ".enabled", true),
@@ -22,13 +25,21 @@ export async function joinCoinFlipQueueIdempotent(userId: string, stake: number)
     if (maintenance) throw Object.assign(new Error("pvp_coinflip is under maintenance"), { statusCode: 503, code: "GAME_MAINTENANCE" });
     if (configuredStakes.length && !configuredStakes.includes(stake)) throw Object.assign(new Error(`Stake $${stake} is not available for this game`), { statusCode: 400, code: "INVALID_STAKE" });
 
-    const matched = await tx.matchmakingQueue.findFirst({
-      where: { userId, gameType, status: "matched", matchId: { not: null }, expiresAt: { gt: now } },
+    // A live match is the strongest source of truth. Do not require the queue
+    // lease to still be unexpired: a browser can disappear while the match keeps
+    // running, and the player must be able to return without another debit.
+    const activeMatch = await tx.pvpMatch.findFirst({
+      where: { gameType, status: "active", OR: [{ player1Id: userId }, { player2Id: userId }] },
       orderBy: { createdAt: "desc" },
+      select: { id: true, stake: true },
     });
-    if (matched?.matchId) {
-      const match = await tx.pvpMatch.findUnique({ where: { id: matched.matchId }, select: { status: true } });
-      if (match?.status === "active" || match?.status === "settled") return { kind: "matched" as const, queueId: matched.id, matchId: matched.matchId };
+    if (activeMatch) {
+      const activeQueue = await tx.matchmakingQueue.findFirst({
+        where: { userId, gameType, matchId: activeMatch.id },
+        orderBy: { createdAt: "desc" },
+        select: { id: true },
+      });
+      return { kind: "matched" as const, queueId: activeQueue?.id ?? "", matchId: activeMatch.id };
     }
 
     const existing = await tx.matchmakingQueue.findFirst({
@@ -75,44 +86,44 @@ export async function joinCoinFlipQueueIdempotent(userId: string, stake: number)
     throw err;
   }
 
-  await db.matchmakingQueue.update({ where: { id: prepared.opponentQueueId }, data: { matchId: match.id } });
-  const mine = await db.matchmakingQueue.create({ data: { userId, gameType, stake, status: "matched", matchId: match.id, expiresAt: new Date(Date.now() + QUEUE_TTL_MS) } });
+  await db.$transaction(async tx => {
+    await tx.matchmakingQueue.update({ where: { id: prepared.opponentQueueId }, data: { matchId: match.id } });
+    await tx.matchmakingQueue.create({ data: { userId, gameType, stake, status: "matched", matchId: match.id, expiresAt: new Date(Date.now() + QUEUE_TTL_MS) } });
+  });
+
+  const mine = await db.matchmakingQueue.findFirstOrThrow({
+    where: { userId, gameType, matchId: match.id },
+    orderBy: { createdAt: "desc" },
+    select: { id: true },
+  });
   return { status: "matched" as const, queueId: mine.id, matchId: match.id };
 }
 
 /**
  * Read-only recovery. This function can never create a queue or debit a wallet.
- * It returns the user's newest live reserved/matched Coin Flip entry, including
- * a settled match because the UI still needs to replay the authoritative result
- * after a browser reload.
+ * It first recovers an actually active match directly from the match table, so
+ * recovery still works if the queue lease expired while the browser was away.
+ * Waiting searches are recovered only while their paid queue lease is valid.
  */
 export async function recoverCoinFlipQueue(userId: string, requestedStake: number) {
+  void requestedStake;
   const now = new Date();
+
+  const activeMatch = await db.pvpMatch.findFirst({
+    where: { gameType: "pvp_coinflip", status: "active", OR: [{ player1Id: userId }, { player2Id: userId }] },
+    orderBy: { createdAt: "desc" },
+    select: { id: true, stake: true },
+  });
+  if (activeMatch) {
+    const queue = await db.matchmakingQueue.findFirst({ where: { userId, gameType: "pvp_coinflip", matchId: activeMatch.id }, orderBy: { createdAt: "desc" }, select: { id: true } });
+    return { status: "matched" as const, queueId: queue?.id ?? "", matchId: activeMatch.id, stake: Number(activeMatch.stake) };
+  }
+
   const entry = await db.matchmakingQueue.findFirst({
-    where: {
-      userId,
-      gameType: "pvp_coinflip",
-      status: { in: ["reserved", "matched"] },
-      expiresAt: { gt: now },
-    },
+    where: { userId, gameType: "pvp_coinflip", status: "reserved", expiresAt: { gt: now } },
     orderBy: { createdAt: "desc" },
   });
 
   if (!entry) return { status: "cancelled" as const };
-
-  if (entry.status === "matched" && entry.matchId) {
-    const match = await db.pvpMatch.findFirst({
-      where: { id: entry.matchId, OR: [{ player1Id: userId }, { player2Id: userId }] },
-      select: { status: true, stake: true },
-    });
-    if (match && (match.status === "active" || match.status === "settled")) {
-      return { status: "matched" as const, queueId: entry.id, matchId: entry.matchId, stake: Number(match.stake) };
-    }
-  }
-
-  if (entry.status === "reserved") {
-    return { status: "waiting" as const, queueId: entry.id, stake: Number(entry.stake) };
-  }
-
-  return { status: "cancelled" as const };
+  return { status: "waiting" as const, queueId: entry.id, stake: Number(entry.stake) };
 }
