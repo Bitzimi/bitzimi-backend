@@ -19,12 +19,12 @@ export async function matchmakingRoutes(app: FastifyInstance) {
         ? { status: "matched" as const, queueId: raw.queueId, matchId: raw.matchId }
         : raw.kind === "waiting"
           ? { status: "waiting" as const, queueId: raw.queueId }
-          : { status: "matched" as const, queueId: raw.queueId, matchId: raw.matchId };
+          : { status: "matched" as const, queueId: raw.queueId, matchId: raw.matchId }
+      : raw;
     return reply.status(data.status === "matched" ? 200 : 202).send({ data });
   });
 
   // Read-only recovery endpoint. It never creates a queue and never debits a wallet.
-  // This lets a browser recover a paid Coin Flip search even when localStorage was lost.
   app.get("/queue/recover", async (req, reply) => {
     const query = z.object({ gameType: z.literal("pvp_coinflip"), stake: z.coerce.number().positive() }).parse(req.query);
     return reply.send({ data: await recoverCoinFlipQueue(req.user.sub, query.stake) });
