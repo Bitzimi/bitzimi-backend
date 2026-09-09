@@ -11,12 +11,14 @@ export async function gamesSharedRoutes(app: FastifyInstance) {
     return reply.send({ data: await getGameStats(req.user.sub) });
   });
 
-  // GET /api/v1/games/history — paginated bet history
+  // GET /api/v1/games/history — paginated bet history.
+  // lobbyId is optional and lets lobby-based games keep independent histories.
   app.get("/history", async (req, reply) => {
     const q = z.object({
       cursor:   z.string().optional(),
       limit:    z.coerce.number().int().min(1).max(50).default(20),
       gameType: z.string().optional(),
+      lobbyId:  z.string().optional(),
     }).parse(req.query);
     return reply.send({ data: await getGameHistory(req.user.sub, q) });
   });
