@@ -5,7 +5,7 @@ import { createReservedMatchForPlayers } from "./matchmaking.service";
 
 const QUEUE_TTL_MS = 5 * 60_000;
 
-/** Coin Flip is a paid queue: repeated/retried enqueue requests must be idempotent. */
+/** Coin Flip public matchmaking is backend-authoritative and idempotent. */
 export async function joinCoinFlipQueueIdempotent(userId: string, stake: number) {
   const gameType = "pvp_coinflip" as const;
   const now = new Date();
@@ -22,10 +22,33 @@ export async function joinCoinFlipQueueIdempotent(userId: string, stake: number)
     if (maintenance) throw Object.assign(new Error("pvp_coinflip is under maintenance"), { statusCode: 503, code: "GAME_MAINTENANCE" });
     if (configuredStakes.length && !configuredStakes.includes(stake)) throw Object.assign(new Error(`Stake $${stake} is not available for this game`), { statusCode: 400, code: "INVALID_STAKE" });
 
+    // A settled match remains recoverable only until the player explicitly starts
+    // another search or the short queue lease expires. Starting a new search
+    // retires the old matched pointer so reloads cannot resurrect an old result.
+    const latestMatched = await tx.matchmakingQueue.findFirst({
+      where: { userId, gameType, status: "matched", matchId: { not: null } },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, matchId: true, expiresAt: true },
+    });
+    if (latestMatched) {
+      const oldMatch = await tx.pvpMatch.findFirst({
+        where: { id: latestMatched.matchId!, gameType, OR: [{ player1Id: userId }, { player2Id: userId }] },
+        select: { status: true },
+      });
+      if (!oldMatch || oldMatch.status !== "active") {
+        await tx.matchmakingQueue.updateMany({
+          where: { id: latestMatched.id, status: "matched" },
+          data: { expiresAt: now },
+        });
+      } else {
+        return { kind: "matched" as const, queueId: latestMatched.id, matchId: latestMatched.matchId! };
+      }
+    }
+
     const activeMatch = await tx.pvpMatch.findFirst({
       where: { gameType, status: "active", OR: [{ player1Id: userId }, { player2Id: userId }] },
       orderBy: { createdAt: "desc" },
-      select: { id: true, stake: true },
+      select: { id: true },
     });
     if (activeMatch) {
       const activeQueue = await tx.matchmakingQueue.findFirst({
@@ -72,16 +95,22 @@ export async function joinCoinFlipQueueIdempotent(userId: string, stake: number)
   try {
     match = await createReservedMatchForPlayers(userId, prepared.opponentId, gameType, stake);
   } catch (err) {
+    // No match exists only when creation failed. In that case both reserved stakes
+    // are returned and the opponent remains searchable.
     await db.$transaction(async tx => {
       await creditWallet(tx, userId, "game", stake);
-      await creditWallet(tx, prepared.opponentId, "game", stake);
-      await tx.matchmakingQueue.updateMany({ where: { id: prepared.opponentQueueId, status: "matched", matchId: null }, data: { status: "reserved", expiresAt: new Date(Date.now() + QUEUE_TTL_MS) } });
+      await tx.matchmakingQueue.updateMany({
+        where: { id: prepared.opponentQueueId, status: "matched", matchId: null },
+        data: { status: "reserved", expiresAt: new Date(Date.now() + QUEUE_TTL_MS) },
+      });
     }).catch(() => {});
     throw err;
   }
 
+  // Match creation/settlement is already financially atomic. Queue-linking is a
+  // separate durable pointer operation and must never refund a settled match.
   await db.$transaction(async tx => {
-    await tx.matchmakingQueue.update({ where: { id: prepared.opponentQueueId }, data: { matchId: match.id } });
+    await tx.matchmakingQueue.update({ where: { id: prepared.opponentQueueId }, data: { matchId: match.id, expiresAt: new Date(Date.now() + QUEUE_TTL_MS) } });
     await tx.matchmakingQueue.create({ data: { userId, gameType, stake, status: "matched", matchId: match.id, expiresAt: new Date(Date.now() + QUEUE_TTL_MS) } });
   });
 
@@ -93,24 +122,23 @@ export async function joinCoinFlipQueueIdempotent(userId: string, stake: number)
   return { status: "matched" as const, queueId: mine.id, matchId: match.id };
 }
 
-/** Read-only recovery: it can never create a queue or debit a wallet. */
+/** Read-only current-state recovery. It never creates a queue or debits a wallet. */
 export async function recoverCoinFlipQueue(userId: string, requestedStake: number) {
   void requestedStake;
   const now = new Date();
 
-  // A matched queue entry is the durable recovery pointer. It remains valid for
-  // the paid queue lease even after the match has already settled, which lets a
-  // browser reload into the current match/result instead of creating a new paid
-  // search after the original match has already been found.
   const matchedQueue = await db.matchmakingQueue.findFirst({
     where: { userId, gameType: "pvp_coinflip", status: "matched", expiresAt: { gt: now }, matchId: { not: null } },
     orderBy: { createdAt: "desc" },
     select: { id: true, matchId: true, stake: true },
   });
   if (matchedQueue?.matchId) {
-    const match = await db.pvpMatch.findFirst({ where: { id: matchedQueue.matchId, gameType: "pvp_coinflip", OR: [{ player1Id: userId }, { player2Id: userId }] }, select: { id: true, stake: true, status: true } });
+    const match = await db.pvpMatch.findFirst({
+      where: { id: matchedQueue.matchId, gameType: "pvp_coinflip", OR: [{ player1Id: userId }, { player2Id: userId }] },
+      select: { id: true, stake: true, status: true },
+    });
     if (match && (match.status === "active" || match.status === "settled")) {
-      return { status: "matched" as const, queueId: matchedQueue.id, matchId: match.id, stake: Number(match.stake) };
+      return { status: "matched" as const, queueId: matchedQueue.id, matchId: match.id, stake: Number(match.stake), matchStatus: match.status };
     }
   }
 
@@ -122,4 +150,45 @@ export async function recoverCoinFlipQueue(userId: string, requestedStake: numbe
 
   if (!entry) return { status: "cancelled" as const };
   return { status: "waiting" as const, queueId: entry.id, stake: Number(entry.stake) };
+}
+
+export async function getCoinFlipHistory(userId: string, stake?: number) {
+  const rows = await db.pvpMatch.findMany({
+    where: {
+      gameType: "pvp_coinflip",
+      status: "settled",
+      ...(stake !== undefined ? { stake } : {}),
+      OR: [{ player1Id: userId }, { player2Id: userId }],
+    },
+    orderBy: { settledAt: "desc" },
+    take: 20,
+    include: {
+      player1: { include: { profile: { select: { username: true, avatarUrl: true } } } },
+      player2: { include: { profile: { select: { username: true, avatarUrl: true } } } },
+    },
+  });
+
+  return rows.map(match => {
+    const isPlayer1 = match.player1Id === userId;
+    const opponent = isPlayer1 ? match.player2 : match.player1;
+    const result = match.resultData ? JSON.parse(match.resultData) : null;
+    const totalPool = Number(match.stake) * 2;
+    const youWon = match.winnerId === userId;
+    return {
+      matchId: match.id,
+      stake: Number(match.stake),
+      totalPool,
+      platformFee: totalPool - (youWon ? Number(match.stake) : 0),
+      result: result?.coinFlip ?? null,
+      youWon,
+      payout: youWon ? totalPool : 0,
+      opponent: {
+        username: opponent.profile?.username ?? "Player",
+        userId: opponent.id,
+        avatar: opponent.profile?.avatarUrl ?? null,
+      },
+      createdAt: match.createdAt.toISOString(),
+      settledAt: match.settledAt?.toISOString() ?? null,
+    };
+  });
 }
