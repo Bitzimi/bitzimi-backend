@@ -5,8 +5,7 @@ import { joinQueue, getQueueStatus, leaveQueue, getMatch, signalReady, submitTap
 import { joinCoinFlipQueueIdempotent, recoverCoinFlipQueue, getCoinFlipHistory } from "./coinflip-matchmaking.service";
 
 const VALID_GAME_TYPES: MatchGameType[] = ["dice_clash", "pvp_coinflip", "reaction_tap"];
-const COIN_FLIP_SYNC_LEAD_MS = 6500;
-const COIN_FLIP_DURATION_MS = 2500;
+const COIN_FLIP_DURATION_MS = 8000;
 
 export async function matchmakingRoutes(app: FastifyInstance) {
   app.addHook("onRequest", authenticate);
@@ -49,9 +48,8 @@ export async function matchmakingRoutes(app: FastifyInstance) {
     const { matchId } = req.params as { matchId: string };
     const data: any = await getMatch(req.user.sub, matchId);
     if (data.gameType === "pvp_coinflip") {
-      const createdAtMs = new Date(data.createdAt).getTime();
       data.serverNow = new Date().toISOString();
-      data.animationStartAt = new Date(createdAtMs + COIN_FLIP_SYNC_LEAD_MS).toISOString();
+      data.animationStartAt = data.createdAt;
       data.animationDurationMs = COIN_FLIP_DURATION_MS;
     }
     return reply.send({ data });
