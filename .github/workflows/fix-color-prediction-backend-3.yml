@@ -1,0 +1,47 @@
+name: Fix Color Prediction Backend 3
+on:
+  push:
+    branches: [fix/color-prediction-global-result-void-transactions]
+    paths: ['.github/workflows/fix-color-prediction-backend-3.yml']
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply exact fixes
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+          p=Path('src/modules/games/colorGame/colorGame.service.ts'); s=p.read_text()
+          if 'import { createHash } from "crypto";' not in s:
+            s=s.replace('import { db } from "../../../db";', 'import { db } from "../../../db";\nimport { createHash } from "crypto";')
+          s=s.replace('  clientSeed: string | null;\n}', '  clientSeed: string | null;\n  spinAngle: number | null;\n}')
+          s=s.replace('clientSeed: round.clientSeed ?? null }', 'clientSeed: round.clientSeed ?? null, spinAngle: round.resultData ? JSON.parse(round.resultData).spinAngle ?? null : null }')
+          s=s.replace('clientSeed: active.clientSeed ?? null }', 'clientSeed: active.clientSeed ?? null, spinAngle: typeof resultData?.spinAngle === "number" ? resultData.spinAngle : null }')
+          s=s.replace('clientSeed: state.clientSeed,\n    phase:', 'clientSeed: state.clientSeed,\n    spinAngle: state.spinAngle,\n    phase:')
+          s=s.replace('status: "cancelled_insufficient_opposition", settledAt: new Date(), resultData: JSON.stringify({ result: state.result, voided: true })', 'status: "result", settledAt: new Date(), resultData: JSON.stringify({ result: state.result, voided: true, settled: true, spinAngle: state.spinAngle })')
+          pattern=r'async function enterSpinning\(lobbyId: string, state: LobbyState\): Promise<void> \{.*?\n\}\n\nasync function tickLobby'
+          replacement='''async function enterSpinning(lobbyId: string, state: LobbyState): Promise<void> {\n  if (state.phase !== "waiting") return;\n  state.phase = "spinning";\n  state.phaseStartedAt = Date.now();\n  const sourceRound = lobbyId === "A"\n    ? await db.gameRound.findUnique({ where: { id: state.roundId } })\n    : await db.gameRound.findFirst({ where: { gameType: "color_game", lobbyId: "A", dailyRoundNumber: state.dailyRoundNumber }, orderBy: { startedAt: "desc" } });\n  const sourceSeed = sourceRound?.serverSeed ?? state.serverSeed;\n  const roundIds = await db.gameRound.findMany({ where: { gameType: "color_game", dailyRoundNumber: state.dailyRoundNumber }, select: { id: true } });\n  const bets = roundIds.length ? await db.gameBet.findMany({ where: { roundId: { in: roundIds.map(r => r.id) } }, select: { userId: true } }) : [];\n  const sortedIds = [...new Set(bets.map(b => String(b.userId)))].sort();\n  const clientSeed = String(generateClientSeed(...sortedIds, `global:${state.dailyRoundNumber}`));\n  const result = deriveColorResult(String(sourceSeed), clientSeed, Number(state.dailyRoundNumber));\n  const spinAngle = createHash("sha256").update(`color-spin:${state.dailyRoundNumber}`).digest().readUInt32BE(0) % 360;\n  state.serverSeed = String(sourceSeed);\n  state.serverSeedHash = hashServerSeed(String(sourceSeed));\n  state.clientSeed = clientSeed;\n  state.result = result;\n  state.spinAngle = spinAngle;\n  await db.gameRound.update({ where: { id: state.roundId }, data: { status: "spinning", serverSeed: state.serverSeed, serverSeedHash: state.serverSeedHash, clientSeed, nonce: state.dailyRoundNumber, resultData: JSON.stringify({ result, spinAngle }) } });\n}\n\nasync function tickLobby'''
+          s2=re.sub(pattern,replacement,s,count=1,flags=re.S)
+          if s2==s: raise SystemExit('enterSpinning pattern not found')
+          s=s2
+          s=s.replace('where: { gameType: "color_game", lobbyId, status: { in: ["completed", "cancelled_insufficient_opposition"] } },','where: { gameType: "color_game", lobbyId: "A", status: { in: ["completed", "cancelled_insufficient_opposition"] } },')
+          s=s.replace('result: b.outcome === "win" ? "win" : b.outcome === "loss" ? "loss" : b.outcome === "draw" ? "draw" : undefined,','result: b.settled ? (b.outcome === "win" ? "win" : b.outcome === "loss" ? "loss" : "draw") : "pending",')
+          s=s.replace('metadata: { gameType: "color_game", roundId: state.roundId, roundNumber: state.dailyRoundNumber, voided: true }','metadata: { gameType: "color_prediction", lobby: lobbyId, roundId: state.roundId, roundNumber: state.dailyRoundNumber, voided: true, stake: bet.amount }')
+          s=s.replace('metadata: { team: winningTeam, roundId: state.roundId, roundNumber: state.dailyRoundNumber, stake: bet.amount, payout }','metadata: { gameType: "color_prediction", lobby: lobbyId, team: winningTeam, roundId: state.roundId, roundNumber: state.dailyRoundNumber, stake: bet.amount, payout }')
+          s=s.replace('metadata: { team: betTeam, winner: winningTeam, roundId: state.roundId, roundNumber: state.dailyRoundNumber, stake: bet.amount, payout: 0 }','metadata: { gameType: "color_prediction", lobby: lobbyId, team: betTeam, winner: winningTeam, roundId: state.roundId, roundNumber: state.dailyRoundNumber, stake: bet.amount, payout: 0 }')
+          p.write_text(s)
+      - name: Build
+        run: npm install && npm run build
+      - name: Commit and clean workflows
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm -f .github/workflows/fix-color-prediction-backend-3.yml .github/workflows/fix-color-prediction-backend.yml .github/workflows/fix-color-prediction-backend-2.yml || true
+          git add src/modules/games/colorGame/colorGame.service.ts
+          git commit -m 'Fix global Color Prediction result, void state and transaction metadata'
+          git push
