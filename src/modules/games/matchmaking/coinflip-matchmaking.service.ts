@@ -19,7 +19,7 @@ export async function joinCoinFlipQueueIdempotent(userId: string, stake: number)
     if (maintenance) throw Object.assign(new Error("pvp_coinflip is under maintenance"), { statusCode: 503, code: "GAME_MAINTENANCE" });
     if (configuredStakes.length && !configuredStakes.includes(stake)) throw Object.assign(new Error(`Stake $${stake} is not available for this game`), { statusCode: 400, code: "INVALID_STAKE" });
 
-    const activeMatch = await tx.pvpMatch.findFirst({ where: { gameType, status: "active", OR: [{ player1Id: userId }, { player2Id: userId }] }, orderBy: { createdAt: "desc" }, select: { id: true } });
+    const activeMatch = await tx.pvpMatch.findFirst({ where: { gameType, status: "active", stake, OR: [{ player1Id: userId }, { player2Id: userId }] }, orderBy: { createdAt: "desc" }, select: { id: true } });
     if (activeMatch) {
       const activeQueue = await tx.matchmakingQueue.findFirst({ where: { userId, gameType, matchId: activeMatch.id }, orderBy: { createdAt: "desc" }, select: { id: true } });
       return { kind: "matched" as const, queueId: activeQueue?.id ?? "", matchId: activeMatch.id };
