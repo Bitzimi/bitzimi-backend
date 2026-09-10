@@ -12,14 +12,11 @@ export async function matchmakingRoutes(app: FastifyInstance) {
 
   app.post("/queue", async (req, reply) => {
     const body = z.object({ gameType: z.enum(["dice_clash", "pvp_coinflip", "reaction_tap"]), stake: z.number().positive() }).parse(req.body);
-    const raw = body.gameType === "pvp_coinflip"
-      ? await joinCoinFlipQueueIdempotent(req.user.sub, body.stake)
-      : await joinQueue(req.user.sub, body.gameType, body.stake);
-    const data = "status" in raw
-      ? raw
-      : raw.kind === "matched"
-        ? { status: "matched" as const, queueId: raw.queueId, matchId: raw.matchId }
-        : { status: "waiting" as const, queueId: raw.queueId };
+    if (body.gameType === "pvp_coinflip") {
+      const data = await joinCoinFlipQueueIdempotent(req.user.sub, body.stake);
+      return reply.status(data.status === "matched" ? 200 : 202).send({ data });
+    }
+    const data = await joinQueue(req.user.sub, body.gameType, body.stake);
     return reply.status(data.status === "matched" ? 200 : 202).send({ data });
   });
 
