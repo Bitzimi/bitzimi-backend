@@ -1,0 +1,87 @@
+name: Coin Flip authority repair
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/modules/games/matchmaking/matchmaking.service.ts'
+      - '.github/workflows/coinflip-authority-repair.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: ${{ !contains(github.event.head_commit.message, '[coinflip-authority-repair]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Repair Coin Flip authority
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('src/modules/games/matchmaking/matchmaking.service.ts')
+          s = p.read_text()
+
+          old = 'async function prepareCoinFlipMatch(matchId:string,p1Id:string,p2Id:string,serverSeed:string){const clientSeed=generateClientSeed(...[p1Id,p2Id].sort(),matchId);const coinFlip=deriveCoinFlip(serverSeed,clientSeed,1);const winnerId=coinFlip==="heads"?p1Id:p2Id;await db.pvpMatch.updateMany({where:{id:matchId,status:"active"},data:{resultData:JSON.stringify({p1Side:"heads",p2Side:"tails",coinFlip,winnerId}),clientSeed,nonce:1}});}'
+          new = 'async function prepareCoinFlipMatch(matchId:string,p1Id:string,p2Id:string,serverSeed:string){const clientSeed=generateClientSeed(...[p1Id,p2Id].sort(),matchId);const coinFlip=deriveCoinFlip(serverSeed,clientSeed,1);const p1Side=randomInt(2)===0?"heads":"tails";const p2Side=p1Side==="heads"?"tails":"heads";const winnerId=coinFlip===p1Side?p1Id:p2Id;const homePlayerId=randomInt(2)===0?p1Id:p2Id;const awayPlayerId=homePlayerId===p1Id?p2Id:p1Id;const feeRate=await getGameFeeRate("pvp_coinflip");const totalPool=stakeForCoinFlip(p1Id,p2Id);const payout=totalPool-totalPool*feeRate;await db.pvpMatch.updateMany({where:{id:matchId,status:"active"},data:{resultData:JSON.stringify({p1Side,p2Side,coinFlip,winnerId,homePlayerId,awayPlayerId,pool:totalPool,platformFee:totalPool*feeRate,payout}),clientSeed,nonce:1}});}'
+          # The match stake is already stored; use a local helper to avoid any frontend-derived value.
+          if old in s:
+              s = s.replace(old, new, 1)
+          elif 'const p1Side=randomInt(2)===0?"heads":"tails"' not in s:
+              raise SystemExit('Coin Flip preparation function not found')
+
+          old_helper = 'function stakeForCoinFlip(p1Id:string,p2Id:string):number{return 0;}'
+          if old_helper not in s:
+              # Insert helper before prepare function; it reads the persisted match stake.
+              marker = 'async function prepareCoinFlipMatch'
+              s = s.replace(marker, 'async function stakeForCoinFlip(p1Id:string,p2Id:string):Promise<number>{const m=await db.pvpMatch.findFirstOrThrow({where:{player1Id:p1Id,player2Id:p2Id,status:"active"},select:{stake:true}});return m.stake*2;}\n'+marker, 1)
+
+          # Persist the same authoritative result metadata during settlement instead of
+          # replacing it with a hard-coded heads/tails mapping.
+          old = 'data:{status:"settled",winnerId,resultData:JSON.stringify({p1Side:"heads",p2Side:"tails",coinFlip,winnerId}),settledAt:new Date(),serverSeed,clientSeed,nonce:result?.nonce??1}'
+          new = 'data:{status:"settled",winnerId,resultData:JSON.stringify({p1Side:result?.p1Side,p2Side:result?.p2Side,coinFlip,winnerId,homePlayerId:result?.homePlayerId,awayPlayerId:result?.awayPlayerId,pool:totalPool,platformFee:fee,payout}),settledAt:new Date(),serverSeed,clientSeed,nonce:result?.nonce??1}'
+          if old in s:
+              s = s.replace(old, new, 1)
+
+          # getMatch must expose the already-calculated payout before the 8-second settlement.
+          old = 'payout:match.winnerId===userId?totalPool-fee:0'
+          new = 'payout:match.gameType==="pvp_coinflip"&&match.resultData?Number((JSON.parse(match.resultData) as any).payout??0):(match.winnerId===userId?totalPool-fee:0)'
+          if old in s:
+              s = s.replace(old, new, 1)
+
+          p.write_text(s)
+
+      - name: Verify backend invariants
+        shell: python
+        run: |
+          from pathlib import Path
+          s = Path('src/modules/games/matchmaking/matchmaking.service.ts').read_text()
+          required = [
+            'const p1Side=randomInt(2)===0?"heads":"tails"',
+            'homePlayerId=randomInt(2)===0?p1Id:p2Id',
+            'pool:totalPool',
+            'platformFee:totalPool*feeRate',
+            'payout:totalPool-totalPool*feeRate',
+          ]
+          for item in required:
+              if item not in s:
+                  raise SystemExit(f'Missing backend invariant: {item}')
+
+      - name: Install and build backend
+        run: |
+          npm install
+          npm run build
+
+      - name: Commit repaired source
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/modules/games/matchmaking/matchmaking.service.ts
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'fix: make Coin Flip sides pool and payout fully authoritative [coinflip-authority-repair]'
+          git push
