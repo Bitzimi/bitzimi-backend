@@ -1,0 +1,60 @@
+name: Coin Flip authoritative cleanup
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/coinflip-authoritative-cleanup.yml
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Repair Coin Flip source
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const path = 'src/modules/games/matchmaking/matchmaking.service.ts';
+          let s = fs.readFileSync(path, 'utf8');
+          // The specialized Coin Flip service is the sole matchmaking implementation used by the route.
+          // Remove the obsolete duplicate implementation so it cannot drift or compete with it.
+          const start = s.indexOf('async function joinCoinFlipQueue(');
+          const end = s.indexOf('\nexport async function getQueueStatus', start);
+          if (start >= 0 && end > start) s = s.slice(0, start) + s.slice(end + 1);
+          // Generic joinQueue must not contain a second Coin Flip implementation.
+          s = s.replace('  if (gameType === "pvp_coinflip") return joinCoinFlipQueue(userId, stake);\n', '');
+          // Make the background worker useful but never rely on it: due Coin Flip matches are settled on reads too.
+          const old = 'export async function getMatch(userId:string,matchId:string){const match=await db.pvpMatch.findFirst({where:{id:matchId,OR:[{player1Id:userId},{player2Id:userId}]},include:{player1:{include:{profile:{select:{username:true,avatarUrl:true}}}},player2:{include:{profile:{select:{username:true,avatarUrl:true}}}}}});if(!match)throw Object.assign(new Error("Match not found"),{statusCode:404,code:"NOT_FOUND"});const isPlayer1=match.player1Id===userId;const opponent=isPlayer1?match.player2:match.player1;const totalPool=match.stake*2;const fee=totalPool*await getGameFeeRate(match.gameType as MatchGameType);const parsedResult=match.resultData?JSON.parse(match.resultData):null;return{matchId:match.id,gameType:match.gameType,stake:match.stake,totalPool,platformFee:match.gameType==="pvp_coinflip"&&parsedResult?.platformFee!=null?Number(parsedResult.platformFee):fee,status:match.status,isPlayer1,opponent:{username:opponent.profile?.username??"Player",userId:opponent.id,avatar:opponent.profile?.avatarUrl??null},result:parsedResult,winnerId:match.winnerId,youWon:match.winnerId===userId,payout:match.gameType==="pvp_coinflip"?Number(parsedResult?.payout??0):(match.winnerId===userId?totalPool-fee:0),createdAt:match.createdAt.toISOString(),settledAt:match.settledAt?.toISOString()??null,signalSentAt:match.signalSentAt?.toISOString()??null,yourReady:isPlayer1?match.player1Ready:match.player2Ready}}'
+          const neu = 'export async function getMatch(userId:string,matchId:string){let match=await db.pvpMatch.findFirst({where:{id:matchId,OR:[{player1Id:userId},{player2Id:userId}]},include:{player1:{include:{profile:{select:{username:true,avatarUrl:true}}}},player2:{include:{profile:{select:{username:true,avatarUrl:true}}}}}});if(!match)throw Object.assign(new Error("Match not found"),{statusCode:404,code:"NOT_FOUND"});if(match.gameType==="pvp_coinflip"&&match.status==="active"&&match.createdAt.getTime()+COIN_FLIP_DURATION_MS<=Date.now()&&match.serverSeed){const feeRate=await getGameFeeRate("pvp_coinflip");const totalPool=match.stake*2;await resolveCoinFlip(match.id,match.player1Id,match.player2Id,match.stake,totalPool*feeRate,totalPool,match.serverSeed,feeRate);match=await db.pvpMatch.findFirstOrThrow({where:{id:matchId},include:{player1:{include:{profile:{select:{username:true,avatarUrl:true}}}},player2:{include:{profile:{select:{username:true,avatarUrl:true}}}}}});}const isPlayer1=match.player1Id===userId;const opponent=isPlayer1?match.player2:match.player1;const totalPool=match.stake*2;const fee=totalPool*await getGameFeeRate(match.gameType as MatchGameType);const parsedResult=match.resultData?JSON.parse(match.resultData):null;return{matchId:match.id,gameType:match.gameType,stake:match.stake,totalPool,platformFee:match.gameType==="pvp_coinflip"&&parsedResult?.platformFee!=null?Number(parsedResult.platformFee):fee,status:match.status,isPlayer1,opponent:{username:opponent.profile?.username??"Player",userId:opponent.id,avatar:opponent.profile?.avatarUrl??null},result:parsedResult,winnerId:match.winnerId,youWon:match.winnerId===userId,payout:match.gameType==="pvp_coinflip"?Number(parsedResult?.payout??0):(match.winnerId===userId?totalPool-fee:0),createdAt:match.createdAt.toISOString(),settledAt:match.settledAt?.toISOString()??null,signalSentAt:match.signalSentAt?.toISOString()??null,yourReady:isPlayer1?match.player1Ready:match.player2Ready}}'
+          if (!s.includes(old)) throw new Error('Expected getMatch implementation not found');
+          s = s.replace(old, neu);
+          fs.writeFileSync(path, s);
+          NODE
+      - name: Repair specialized Coin Flip service
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const path = 'src/modules/games/matchmaking/coinflip-matchmaking.service.ts';
+          let s = fs.readFileSync(path, 'utf8');
+          // Active-match recovery must be stake-scoped. A $1 active match can never be returned from a $5 room.
+          s = s.replace('where: { gameType, status: "active", OR: [{ player1Id: userId }, { player2Id: userId }] }', 'where: { gameType, status: "active", stake, OR: [{ player1Id: userId }, { player2Id: userId }] }');
+          // Recovery must settle an overdue active match before returning it; never resurrect an old result as active.
+          const oldRecover = 'export async function recoverCoinFlipQueue(userId: string, requestedStake: number) {\n  const now = new Date();\n  const current = await db.matchmakingQueue.findFirst({ where: { userId, gameType: "pvp_coinflip", stake: requestedStake, status: { in: ["reserved", "matched"] }, expiresAt: { gt: now } }, orderBy: { createdAt: "desc" }, select: { id: true, matchId: true, status: true, stake: true } });\n  if (!current) return { status: "cancelled" as const };\n  if (current.status === "reserved") return { status: "waiting" as const, queueId: current.id, stake: Number(current.stake) };\n  if (!current.matchId) return { status: "cancelled" as const };\n  const match = await db.pvpMatch.findFirst({ where: { id: current.matchId, gameType: "pvp_coinflip", status: "active", OR: [{ player1Id: userId }, { player2Id: userId }] }, select: { id: true, stake: true, status: true } });\n  if (!match) {\n    await db.matchmakingQueue.updateMany({ where: { id: current.id, status: "matched" }, data: { expiresAt: now } }).catch(() => {});\n    return { status: "cancelled" as const };\n  }\n  return { status: "matched" as const, queueId: current.id, matchId: match.id, stake: Number(match.stake), matchStatus: match.status };\n}'
+          const neuRecover = 'export async function recoverCoinFlipQueue(userId: string, requestedStake: number) {\n  const now = new Date();\n  const current = await db.matchmakingQueue.findFirst({ where: { userId, gameType: "pvp_coinflip", stake: requestedStake, status: { in: ["reserved", "matched"] }, expiresAt: { gt: now } }, orderBy: { createdAt: "desc" }, select: { id: true, matchId: true, status: true, stake: true } });\n  if (!current) return { status: "cancelled" as const };\n  if (current.status === "reserved") return { status: "waiting" as const, queueId: current.id, stake: Number(current.stake) };\n  if (!current.matchId) return { status: "cancelled" as const };\n  let match = await db.pvpMatch.findFirst({ where: { id: current.matchId, gameType: "pvp_coinflip", status: "active", stake: requestedStake, OR: [{ player1Id: userId }, { player2Id: userId }] }, select: { id: true, stake: true, status: true, createdAt: true, serverSeed: true, player1Id: true, player2Id: true } });\n  if (!match) {\n    await db.matchmakingQueue.updateMany({ where: { id: current.id, status: "matched" }, data: { expiresAt: now } }).catch(() => {});\n    return { status: "cancelled" as const };\n  }\n  if (match.createdAt.getTime() + 8000 <= now.getTime() && match.serverSeed) {\n    const feeRate = await getConfigValue<number>("game.pvp_coinflip.fee_rate", 0.1);\n    const { resolveCoinFlip } = await import("./matchmaking.service");\n    await resolveCoinFlip(match.id, match.player1Id, match.player2Id, Number(match.stake), Number(match.stake)*2*feeRate, Number(match.stake)*2, match.serverSeed, feeRate);\n    const settled = await db.pvpMatch.findUnique({ where: { id: match.id }, select: { status: true } });\n    if (settled?.status !== "active") return { status: "cancelled" as const };\n  }\n  return { status: "matched" as const, queueId: current.id, matchId: match.id, stake: Number(match.stake), matchStatus: match.status };\n}'
+          if (!s.includes(oldRecover)) throw new Error('Expected recoverCoinFlipQueue implementation not found');
+          s = s.replace(oldRecover, neuRecover);
+          fs.writeFileSync(path, s);
+          NODE
+      - name: Build and commit
+        run: |
+          npm ci
+          npm run build
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/modules/games/matchmaking/matchmaking.service.ts src/modules/games/matchmaking/coinflip-matchmaking.service.ts
+          git diff --cached --quiet || git commit -m 'fix: isolate Coin Flip matches by stake and settle overdue matches'
+          git push
