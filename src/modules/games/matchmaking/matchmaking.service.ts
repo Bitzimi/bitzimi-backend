@@ -16,14 +16,17 @@ export function startQueueCleanup(): void {
     (async () => {
       const expired = await db.matchmakingQueue.findMany({ where: { status: { in: ["waiting", "reserved"] }, expiresAt: { lt: new Date() } }, take: 100 });
       for (const entry of expired) {
-        if (entry.status === "reserved") await db.$transaction(async tx => { const claimed = await tx.matchmakingQueue.updateMany({ where: { id: entry.id, status: "reserved" }, data: { status: "cancelled" } }); if (claimed.count) await creditWallet(tx, entry.userId, "game", entry.stake); }).catch(() => {});
+        if (entry.status === "reserved") await db.$transaction(async tx => { const claimed = await tx.matchmakingQueue.updateMany({ where: { id: entry.id, status: "reserved" }, data: { status: "cancelled" } }); if (claimed.count && entry.gameType !== "pvp_coinflip") await creditWallet(tx, entry.userId, "game", entry.stake); }).catch(() => {});
         else await db.matchmakingQueue.updateMany({ where: { id: entry.id, status: "waiting" }, data: { status: "cancelled" } }).catch(() => {});
       }
-      await recoverUnresolvedImmediateMatches(); await processReactionTapTimeouts();
+      await recoverUnresolvedImmediateMatches();
+      await processCoinFlipSettlements();
+      await processReactionTapTimeouts();
     })().catch(() => {});
   }, 1000);
 }
 export async function joinQueue(userId: string, gameType: MatchGameType, stake: number) {
+  if (gameType === "pvp_coinflip") return joinCoinFlipQueue(userId, stake);
   const activeMatch = await db.pvpMatch.findFirst({ where: { gameType, status: "active", OR: [{ player1Id: userId }, { player2Id: userId }] } });
   if (activeMatch) { const entry = await db.matchmakingQueue.findFirst({ where: { userId, gameType, matchId: activeMatch.id } }); return { status: "matched" as const, queueId: entry?.id ?? "", matchId: activeMatch.id }; }
   const now = new Date();
@@ -46,38 +49,56 @@ export async function joinQueue(userId: string, gameType: MatchGameType, stake: 
     const mine = await db.matchmakingQueue.create({ data: { userId, gameType, stake, status: "matched", matchId: match.id, expiresAt: new Date(Date.now() + QUEUE_TTL_MS) } });
     setImmediate(() => { activateReferral(userId).catch(() => {}); activateReferral(opponent.userId).catch(() => {}); });
     return { status: "matched" as const, queueId: mine.id, matchId: match.id };
-  } catch (err) {
-    await db.$transaction(async tx => { await creditWallet(tx, userId, "game", stake); await creditWallet(tx, opponent.userId, "game", stake); await tx.matchmakingQueue.updateMany({ where: { id: opponent.id, status: "matched", matchId: null }, data: { status: "reserved", expiresAt: new Date(Date.now() + QUEUE_TTL_MS) } }); }).catch(() => {});
-    throw err;
+  } catch (err) { throw err; }
+}
+async function joinCoinFlipQueue(userId: string, stake: number) {
+  const gameType: MatchGameType = "pvp_coinflip";
+  const now = new Date();
+  const [enabled, maintenance, configuredStakes] = await Promise.all([getConfigValue<boolean>("game." + gameType + ".enabled", true), getConfigValue<boolean>("game." + gameType + ".maintenance", false), getConfigValue<number[]>("game." + gameType + ".stakes", [])]);
+  if (!enabled) throw Object.assign(new Error("pvp_coinflip is currently unavailable"), { statusCode: 503, code: "GAME_DISABLED" });
+  if (maintenance) throw Object.assign(new Error("pvp_coinflip is under maintenance"), { statusCode: 503, code: "GAME_MAINTENANCE" });
+  if (configuredStakes.length && !configuredStakes.includes(stake)) throw Object.assign(new Error("Stake $" + stake + " is not available for this game"), { statusCode: 400, code: "INVALID_STAKE" });
+  const activeMatch = await db.pvpMatch.findFirst({ where: { gameType, status: "active", OR: [{ player1Id: userId }, { player2Id: userId }] } });
+  if (activeMatch) { const entry = await db.matchmakingQueue.findFirst({ where: { userId, gameType, matchId: activeMatch.id } }); return { status: "matched" as const, queueId: entry?.id ?? "", matchId: activeMatch.id }; }
+  const existing = await db.matchmakingQueue.findFirst({ where: { userId, gameType, stake, status: "reserved", expiresAt: { gt: now } } });
+  if (existing) return { status: "waiting" as const, queueId: existing.id };
+  const outcome = await db.$transaction(async tx => {
+    const opponent = await tx.matchmakingQueue.findFirst({ where: { gameType, stake, status: "reserved", userId: { not: userId }, expiresAt: { gt: now } }, orderBy: { createdAt: "asc" } });
+    if (!opponent) { const entry = await tx.matchmakingQueue.create({ data: { userId, gameType, stake, status: "reserved", expiresAt: new Date(Date.now() + QUEUE_TTL_MS) } }); return { status: "waiting" as const, queueId: entry.id }; }
+    await tx.$queryRaw`SELECT id FROM matchmaking_queue WHERE id = ${opponent.id} FOR UPDATE`;
+    const claimed = await tx.matchmakingQueue.updateMany({ where: { id: opponent.id, status: "reserved", expiresAt: { gt: now } }, data: { status: "matched" } });
+    if (!claimed.count) throw Object.assign(new Error("Opponent is no longer available"), { statusCode: 409, code: "OPPONENT_UNAVAILABLE" });
+    await debitWallet(tx, userId, "game", stake);
+    await debitWallet(tx, opponent.userId, "game", stake);
+    const serverSeed = generateServerSeed();
+    const serverSeedHash = hashServerSeed(serverSeed);
+    const verificationId = generateVerificationId(gameType);
+    const match = await tx.pvpMatch.create({ data: { gameType, stake, player1Id: userId, player2Id: opponent.userId, serverSeedHash, verificationId, serverSeed } });
+    await tx.matchmakingQueue.update({ where: { id: opponent.id }, data: { matchId: match.id } });
+    const mine = await tx.matchmakingQueue.create({ data: { userId, gameType, stake, status: "matched", matchId: match.id, expiresAt: new Date(Date.now() + QUEUE_TTL_MS) } });
+    return { status: "matched" as const, queueId: mine.id, matchId: match.id, player1Id: userId, player2Id: opponent.userId, serverSeed };
+  });
+  if (outcome.status === "matched") {
+    try { await prepareCoinFlipMatch(outcome.matchId, outcome.player1Id, outcome.player2Id, stake, outcome.serverSeed); } catch (err) { console.error(`[Matchmaking] Coin Flip preparation deferred for ${outcome.matchId}:`, err); }
+    setImmediate(() => { activateReferral(userId).catch(() => {}); activateReferral(outcome.player2Id).catch(() => {}); });
   }
+  return outcome;
 }
 export async function getQueueStatus(userId: string, queueId: string) {
   const entry = await db.matchmakingQueue.findFirst({ where: { id: queueId, userId } });
   if (!entry) throw Object.assign(new Error("Queue entry not found"), { statusCode: 404, code: "NOT_FOUND" });
   if (entry.status === "matched" && entry.matchId) return { status: "matched" as const, matchId: entry.matchId };
   if (entry.status === "cancelled" || new Date() > entry.expiresAt) {
-    if (entry.status === "reserved") await db.$transaction(async tx => { const claimed = await tx.matchmakingQueue.updateMany({ where: { id: queueId, userId, status: "reserved" }, data: { status: "cancelled" } }); if (claimed.count) await creditWallet(tx, userId, "game", entry.stake); });
+    if (entry.status === "reserved") await db.$transaction(async tx => { const claimed = await tx.matchmakingQueue.updateMany({ where: { id: queueId, userId, status: "reserved" }, data: { status: "cancelled" } }); if (claimed.count && entry.gameType !== "pvp_coinflip") await creditWallet(tx, userId, "game", entry.stake); });
     else if (entry.status === "waiting") await db.matchmakingQueue.updateMany({ where: { id: queueId, userId, status: "waiting" }, data: { status: "cancelled" } });
     return { status: "cancelled" as const };
   }
   return { status: "waiting" as const };
 }
-export async function leaveQueue(userId: string, queueId: string) { await db.$transaction(async tx => { const entry = await tx.matchmakingQueue.findFirst({ where: { id: queueId, userId } }); if (!entry) return; if (entry.status === "reserved") { const claimed = await tx.matchmakingQueue.updateMany({ where: { id: queueId, userId, status: "reserved" }, data: { status: "cancelled" } }); if (claimed.count) await creditWallet(tx, userId, "game", entry.stake); } else if (entry.status === "waiting") await tx.matchmakingQueue.updateMany({ where: { id: queueId, userId, status: "waiting" }, data: { status: "cancelled" } }); }); }
+export async function leaveQueue(userId: string, queueId: string) { await db.$transaction(async tx => { const entry = await tx.matchmakingQueue.findFirst({ where: { id: queueId, userId } }); if (!entry) return; if (entry.status === "reserved") { const claimed = await tx.matchmakingQueue.updateMany({ where: { id: queueId, userId, status: "reserved" }, data: { status: "cancelled" } }); if (claimed.count && entry.gameType !== "pvp_coinflip") await creditWallet(tx, userId, "game", entry.stake); } else if (entry.status === "waiting") await tx.matchmakingQueue.updateMany({ where: { id: queueId, userId, status: "waiting" }, data: { status: "cancelled" } }); }); }
 async function createGameNotification(tx: any, userId: string, won: boolean, gameName: string, stake: number, payout: number, opponentId: string) { await tx.notification.create({ data: { userId, type: won ? "game_win" : "game_loss", title: won ? `🎉 ${gameName} Victory!` : `${gameName} Result`, message: won ? `You won $${payout.toFixed(2)} after staking $${stake.toFixed(2)}.` : `You lost $${stake.toFixed(2)} in ${gameName}.`, metadata: JSON.stringify({ game: gameName.toLowerCase().replace(/\s+/g, "_"), stake, payout, opponentId }) } }); }
-export async function createMatchForPlayers(player1Id: string, player2Id: string, gameType: MatchGameType, stake: number) {
-  const totalPool = stake * 2; const feeRate = await getGameFeeRate(gameType); const fee = totalPool * feeRate; const serverSeed = generateServerSeed(); const serverSeedHash = hashServerSeed(serverSeed); const verificationId = gameType === "reaction_tap" ? undefined : generateVerificationId(gameType);
-  const match = await db.$transaction(async tx => { for (const pid of [player1Id, player2Id]) { await debitWallet(tx, pid, "game", stake); } return tx.pvpMatch.create({ data: { gameType, stake, player1Id, player2Id, serverSeedHash, verificationId } }); });
-  try { if (gameType === "dice_clash") await resolveDiceClash(match.id, player1Id, player2Id, stake, fee, totalPool, serverSeed, feeRate); else if (gameType === "pvp_coinflip") await resolveCoinFlip(match.id, player1Id, player2Id, stake, fee, totalPool, serverSeed, feeRate); } catch (err) { console.error(`[Matchmaking] Immediate settlement deferred for ${match.id}:`, err); }
-  return db.pvpMatch.findUniqueOrThrow({ where: { id: match.id } });
-}
-
-export async function createReservedMatchForPlayers(player1Id: string, player2Id: string, gameType: MatchGameType, stake: number) {
-  const totalPool = stake * 2; const feeRate = await getGameFeeRate(gameType); const fee = totalPool * feeRate; const serverSeed = generateServerSeed(); const serverSeedHash = hashServerSeed(serverSeed); const verificationId = gameType === "reaction_tap" ? undefined : generateVerificationId(gameType);
-  const match = await db.pvpMatch.create({ data: { gameType, stake, player1Id, player2Id, serverSeedHash, verificationId } });
-  try { if (gameType === "dice_clash") await resolveDiceClash(match.id, player1Id, player2Id, stake, fee, totalPool, serverSeed, feeRate); else if (gameType === "pvp_coinflip") await resolveCoinFlip(match.id, player1Id, player2Id, stake, fee, totalPool, serverSeed, feeRate); } catch (err) { console.error(`[Matchmaking] Immediate settlement deferred for ${match.id}:`, err); }
-  return db.pvpMatch.findUniqueOrThrow({ where: { id: match.id } });
-}
-
+export async function createMatchForPlayers(player1Id: string, player2Id: string, gameType: MatchGameType, stake: number) { const totalPool = stake * 2; const feeRate = await getGameFeeRate(gameType); const fee = totalPool * feeRate; const serverSeed = generateServerSeed(); const serverSeedHash = hashServerSeed(serverSeed); const verificationId = gameType === "reaction_tap" ? undefined : generateVerificationId(gameType); const match = await db.$transaction(async tx => { for (const pid of [player1Id, player2Id]) await debitWallet(tx, pid, "game", stake); return tx.pvpMatch.create({ data: { gameType, stake, player1Id, player2Id, serverSeedHash, verificationId, ...(gameType === "pvp_coinflip" ? { serverSeed } : {}) } }); }); try { if (gameType === "dice_clash") await resolveDiceClash(match.id, player1Id, player2Id, stake, fee, totalPool, serverSeed, feeRate); else if (gameType === "pvp_coinflip") await prepareCoinFlipMatch(match.id, player1Id, player2Id, stake, serverSeed); } catch (err) { console.error(`[Matchmaking] Match preparation deferred for ${match.id}:`, err); } return db.pvpMatch.findUniqueOrThrow({ where: { id: match.id } }); }
+export async function createReservedMatchForPlayers(player1Id: string, player2Id: string, gameType: MatchGameType, stake: number) { const totalPool = stake * 2; const feeRate = await getGameFeeRate(gameType); const fee = totalPool * feeRate; const serverSeed = generateServerSeed(); const serverSeedHash = hashServerSeed(serverSeed); const verificationId = gameType === "reaction_tap" ? undefined : generateVerificationId(gameType); const match = await db.pvpMatch.create({ data: { gameType, stake, player1Id, player2Id, serverSeedHash, verificationId, ...(gameType === "pvp_coinflip" ? { serverSeed } : {}) } }); try { if (gameType === "dice_clash") await resolveDiceClash(match.id, player1Id, player2Id, stake, fee, totalPool, serverSeed, feeRate); else if (gameType === "pvp_coinflip") await prepareCoinFlipMatch(match.id, player1Id, player2Id, stake, serverSeed); } catch (err) { console.error(`[Matchmaking] Match preparation deferred for ${match.id}:`, err); } return db.pvpMatch.findUniqueOrThrow({ where: { id: match.id } }); }
 async function resolveDiceClash(matchId:string,p1Id:string,p2Id:string,stake:number,fee:number,totalPool:number,serverSeed:string,feeRate:number){const clientSeed=generateClientSeed(...[p1Id,p2Id].sort(),matchId);const{p1Roll,p2Roll}=deriveDiceClash(serverSeed,clientSeed,1);const winnerId=p1Roll>p2Roll?p1Id:p2Roll>p1Roll?p2Id:(p1Id<p2Id?p1Id:p2Id);const loserId=winnerId===p1Id?p2Id:p1Id;const payout=totalPool-fee;await db.$transaction(async tx=>{const guard=await tx.pvpMatch.updateMany({where:{id:matchId,status:"active"},data:{status:"settled",winnerId,resultData:JSON.stringify({p1Roll,p2Roll,winnerId}),settledAt:new Date(),serverSeed,clientSeed,nonce:1}});if(!guard.count)return;await creditWallet(tx,winnerId,"game",payout);await writeLedgerEntry(tx,{userId:winnerId,type:"game_win",toWallet:"game",amount:payout,description:"Dice Clash win",referenceId:matchId,referenceType:"pvp_match"});await writeLedgerEntry(tx,{userId:loserId,type:"game_loss",fromWallet:"game",amount:stake,description:"Dice Clash loss",referenceId:matchId,referenceType:"pvp_match"});await recordGameResult({tx,userId:winnerId,gameType:"dice_clash",wagered:stake,won:true,payout});await recordGameResult({tx,userId:loserId,gameType:"dice_clash",wagered:stake,won:false,payout:0});await createGameNotification(tx,winnerId,true,"Dice Clash",stake,payout,loserId);await createGameNotification(tx,loserId,false,"Dice Clash",stake,0,winnerId);const userFee=stake*feeRate;await createGameFeeJobInTx(tx,{userId:winnerId,userFee,isMultiGame:false,eventRefId:matchId});await createGameFeeJobInTx(tx,{userId:loserId,userFee,isMultiGame:false,eventRefId:matchId})})}
 async function prepareCoinFlipMatch(matchId:string,p1Id:string,p2Id:string,stake:number,serverSeed:string){const clientSeed=generateClientSeed(...[p1Id,p2Id].sort(),matchId);const coinFlip=deriveCoinFlip(serverSeed,clientSeed,1);const p1Side=randomInt(2)===0?"heads":"tails";const p2Side=p1Side==="heads"?"tails":"heads";const winnerId=coinFlip===p1Side?p1Id:p2Id;const homePlayerId=randomInt(2)===0?p1Id:p2Id;const awayPlayerId=homePlayerId===p1Id?p2Id:p1Id;const feeRate=await getGameFeeRate("pvp_coinflip");const totalPool=stake*2;const platformFee=totalPool*feeRate;const payout=totalPool-platformFee;await db.pvpMatch.updateMany({where:{id:matchId,status:"active"},data:{resultData:JSON.stringify({p1Side,p2Side,coinFlip,winnerId,homePlayerId,awayPlayerId,pool:totalPool,platformFee,payout}),clientSeed,nonce:1}});}
 async function resolveCoinFlip(matchId:string,p1Id:string,p2Id:string,stake:number,fee:number,totalPool:number,serverSeed:string,feeRate:number){const existing=await db.pvpMatch.findUnique({where:{id:matchId},select:{resultData:true}});const result=existing?.resultData?JSON.parse(existing.resultData):null;const coinFlip=result?.coinFlip as "heads"|"tails"|undefined;const winnerId=result?.winnerId as string|undefined;if(!coinFlip||!winnerId){await prepareCoinFlipMatch(matchId,p1Id,p2Id,stake,serverSeed);return;}const loserId=winnerId===p1Id?p2Id:p1Id;const payout=totalPool-fee;const clientSeed=result?.clientSeed??generateClientSeed(...[p1Id,p2Id].sort(),matchId);await db.$transaction(async tx=>{const guard=await tx.pvpMatch.updateMany({where:{id:matchId,status:"active"},data:{status:"settled",winnerId,resultData:JSON.stringify({p1Side:result?.p1Side,p2Side:result?.p2Side,coinFlip,winnerId,homePlayerId:result?.homePlayerId,awayPlayerId:result?.awayPlayerId,pool:totalPool,platformFee:fee,payout}),settledAt:new Date(),serverSeed,clientSeed,nonce:result?.nonce??1}});if(!guard.count)return;await creditWallet(tx,winnerId,"game",payout);await writeLedgerEntry(tx,{userId:winnerId,type:"game_win",toWallet:"game",amount:payout,description:"Coin Flip win",referenceId:matchId,referenceType:"pvp_match"});await writeLedgerEntry(tx,{userId:loserId,type:"game_loss",fromWallet:"game",amount:stake,description:"Coin Flip loss",referenceId:matchId,referenceType:"pvp_match"});await recordGameResult({tx,userId:winnerId,gameType:"pvp_coinflip",wagered:stake,won:true,payout});await recordGameResult({tx,userId:loserId,gameType:"pvp_coinflip",wagered:stake,won:false,payout:0});await createGameNotification(tx,winnerId,true,"Coin Flip",stake,payout,loserId);await createGameNotification(tx,loserId,false,"Coin Flip",stake,0,winnerId);const userFee=stake*feeRate;await createGameFeeJobInTx(tx,{userId:winnerId,userFee,isMultiGame:false,eventRefId:matchId});await createGameFeeJobInTx(tx,{userId:loserId,userFee,isMultiGame:false,eventRefId:matchId})})}
