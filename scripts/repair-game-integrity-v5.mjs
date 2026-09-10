@@ -14,10 +14,7 @@ if (!s.includes("const COIN_FLIP_DURATION_MS = 8_000;")) {
   s = s.replace('const REACTION_TAP_TIMEOUT_MS = 20_000;', 'const REACTION_TAP_TIMEOUT_MS = 20_000;\nconst COIN_FLIP_DURATION_MS = 8_000;');
 }
 
-s = s.replace(
-  'await recoverUnresolvedImmediateMatches(); await processReactionTapTimeouts();',
-  'await recoverUnresolvedImmediateMatches(); await processCoinFlipSettlements(); await processReactionTapTimeouts();'
-);
+s = s.replace('await recoverUnresolvedImmediateMatches(); await processReactionTapTimeouts();', 'await recoverUnresolvedImmediateMatches(); await processCoinFlipSettlements(); await processReactionTapTimeouts();');
 
 const createMatch = `export async function createMatchForPlayers(player1Id: string, player2Id: string, gameType: MatchGameType, stake: number) {
   const totalPool = stake * 2; const feeRate = await getGameFeeRate(gameType); const fee = totalPool * feeRate;
@@ -30,7 +27,7 @@ const createMatch = `export async function createMatchForPlayers(player1Id: stri
   try {
     if (gameType === "dice_clash") await resolveDiceClash(match.id, player1Id, player2Id, stake, fee, totalPool, serverSeed, feeRate);
     else if (gameType === "pvp_coinflip") await prepareCoinFlipMatch(match.id, player1Id, player2Id, serverSeed);
-  } catch (err) { console.error(`[Matchmaking] Match preparation deferred for ${match.id}:`, err); }
+  } catch (err) { console.error('[Matchmaking] Match preparation deferred for ' + match.id + ':', err); }
   return db.pvpMatch.findUniqueOrThrow({ where: { id: match.id } });
 }
 
@@ -42,7 +39,7 @@ export async function createReservedMatchForPlayers(player1Id: string, player2Id
   try {
     if (gameType === "dice_clash") await resolveDiceClash(match.id, player1Id, player2Id, stake, fee, totalPool, serverSeed, feeRate);
     else if (gameType === "pvp_coinflip") await prepareCoinFlipMatch(match.id, player1Id, player2Id, serverSeed);
-  } catch (err) { console.error(`[Matchmaking] Match preparation deferred for ${match.id}:`, err); }
+  } catch (err) { console.error('[Matchmaking] Match preparation deferred for ' + match.id + ':', err); }
   return db.pvpMatch.findUniqueOrThrow({ where: { id: match.id } });
 }
 
@@ -88,7 +85,7 @@ async function processCoinFlipSettlements(){
     if(!m.serverSeed)continue;
     const feeRate=await getGameFeeRate("pvp_coinflip");
     const totalPool=m.stake*2; const fee=totalPool*feeRate;
-    try{await resolveCoinFlip(m.id,m.player1Id,m.player2Id,m.stake,fee,totalPool,m.serverSeed,feeRate)}catch(err){console.error(`[CoinFlip] Settlement retry failed for ${m.id}:`,err)}
+    try{await resolveCoinFlip(m.id,m.player1Id,m.player2Id,m.stake,fee,totalPool,m.serverSeed,feeRate)}catch(err){console.error('[CoinFlip] Settlement retry failed for ' + m.id + ':',err)}
   }
 }
 
