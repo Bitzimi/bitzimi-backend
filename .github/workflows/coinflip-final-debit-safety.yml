@@ -1,0 +1,44 @@
+name: Coin Flip final debit safety patch
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, '[coinflip-final-patched]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Patch Coin Flip queue refund behavior
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/modules/games/matchmaking/matchmaking.service.ts')
+          s = p.read_text()
+          old = 'if (entry.status === "reserved") await db.$transaction(async tx => { const claimed = await tx.matchmakingQueue.updateMany({ where: { id: entry.id, status: "reserved" }, data: { status: "cancelled" } }); if (claimed.count) await creditWallet(tx, entry.userId, "game", entry.stake); }).catch(() => {});'
+          new = 'if (entry.status === "reserved") await db.$transaction(async tx => { const claimed = await tx.matchmakingQueue.updateMany({ where: { id: entry.id, status: "reserved" }, data: { status: "cancelled" } }); if (claimed.count && entry.gameType !== "pvp_coinflip") await creditWallet(tx, entry.userId, "game", entry.stake); }).catch(() => {});'
+          if old not in s: raise SystemExit('cleanup pattern not found')
+          s = s.replace(old, new, 1)
+          old = 'if (entry.status === "reserved") await db.$transaction(async tx => { const claimed = await tx.matchmakingQueue.updateMany({ where: { id: queueId, userId, status: "reserved" }, data: { status: "cancelled" } }); if (claimed.count) await creditWallet(tx, userId, "game", entry.stake); });'
+          new = 'if (entry.status === "reserved") await db.$transaction(async tx => { const claimed = await tx.matchmakingQueue.updateMany({ where: { id: queueId, userId, status: "reserved" }, data: { status: "cancelled" } }); if (claimed.count && entry.gameType !== "pvp_coinflip") await creditWallet(tx, userId, "game", entry.stake); });'
+          if old not in s: raise SystemExit('status pattern not found')
+          s = s.replace(old, new, 1)
+          old = 'if (entry.status === "reserved") { const claimed = await tx.matchmakingQueue.updateMany({ where: { id: queueId, userId, status: "reserved" }, data: { status: "cancelled" } }); if (claimed.count) await creditWallet(tx, userId, "game", entry.stake); } else if (entry.status === "waiting")'
+          new = 'if (entry.status === "reserved") { const claimed = await tx.matchmakingQueue.updateMany({ where: { id: queueId, userId, status: "reserved" }, data: { status: "cancelled" } }); if (claimed.count && entry.gameType !== "pvp_coinflip") await creditWallet(tx, userId, "game", entry.stake); } else if (entry.status === "waiting")'
+          if old not in s: raise SystemExit('leave pattern not found')
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+      - name: Verify build
+        run: npm install && npm run build
+      - name: Commit patch
+        run: |
+          git config user.name "Bitzimi"
+          git config user.email "noreply.bitzimi@gmail.com"
+          git add src/modules/games/matchmaking/matchmaking.service.ts
+          git commit -m "fix: prevent Coin Flip refunds before match [coinflip-final-patched]"
+          git push
