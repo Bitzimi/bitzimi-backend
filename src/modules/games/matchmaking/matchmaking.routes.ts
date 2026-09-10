@@ -2,61 +2,48 @@ import { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { authenticate } from "../../../middleware/authenticate";
 import { joinQueue, getQueueStatus, leaveQueue, getMatch, signalReady, submitTap, MatchGameType } from "./matchmaking.service";
-import { joinCoinFlipQueueIdempotent, recoverCoinFlipQueue, getCoinFlipHistory } from "./coinflip-matchmaking.service";
 
 const VALID_GAME_TYPES: MatchGameType[] = ["dice_clash", "pvp_coinflip", "reaction_tap"];
-const COIN_FLIP_DURATION_MS = 8000;
 
 export async function matchmakingRoutes(app: FastifyInstance) {
   app.addHook("onRequest", authenticate);
 
+  // POST /api/v1/games/queue — join matchmaking queue
   app.post("/queue", async (req, reply) => {
-    const body = z.object({ gameType: z.enum(["dice_clash", "pvp_coinflip", "reaction_tap"]), stake: z.number().positive() }).parse(req.body);
-    if (body.gameType === "pvp_coinflip") {
-      const data = await joinCoinFlipQueueIdempotent(req.user.sub, body.stake);
-      return reply.status(data.status === "matched" ? 200 : 202).send({ data });
-    }
+    const body = z.object({
+      gameType: z.enum(["dice_clash", "pvp_coinflip", "reaction_tap"]),
+      stake:    z.number().positive(),
+    }).parse(req.body);
     const data = await joinQueue(req.user.sub, body.gameType, body.stake);
     return reply.status(data.status === "matched" ? 200 : 202).send({ data });
   });
 
-  app.get("/queue/recover", async (req, reply) => {
-    const query = z.object({ gameType: z.literal("pvp_coinflip"), stake: z.coerce.number().positive() }).parse(req.query);
-    return reply.send({ data: await recoverCoinFlipQueue(req.user.sub, query.stake) });
-  });
-
-  app.get("/coinflip/history", async (req, reply) => {
-    const query = z.object({ stake: z.coerce.number().positive().optional() }).parse(req.query);
-    return reply.send({ data: await getCoinFlipHistory(req.user.sub, query.stake) });
-  });
-
+  // GET /api/v1/games/queue/:queueId — poll queue status
   app.get("/queue/:queueId", async (req, reply) => {
     const { queueId } = req.params as { queueId: string };
     return reply.send({ data: await getQueueStatus(req.user.sub, queueId) });
   });
 
+  // DELETE /api/v1/games/queue/:queueId — leave queue
   app.delete("/queue/:queueId", async (req, reply) => {
     const { queueId } = req.params as { queueId: string };
     await leaveQueue(req.user.sub, queueId);
     return reply.status(204).send();
   });
 
+  // GET /api/v1/games/matches/:matchId — get match state and result
   app.get("/matches/:matchId", async (req, reply) => {
     const { matchId } = req.params as { matchId: string };
-    const data: any = await getMatch(req.user.sub, matchId);
-    if (data.gameType === "pvp_coinflip") {
-      data.serverNow = new Date().toISOString();
-      data.animationStartAt = data.createdAt;
-      data.animationDurationMs = COIN_FLIP_DURATION_MS;
-    }
-    return reply.send({ data });
+    return reply.send({ data: await getMatch(req.user.sub, matchId) });
   });
 
+  // POST /api/v1/games/matches/:matchId/ready — ReactionTap: signal ready
   app.post("/matches/:matchId/ready", async (req, reply) => {
     const { matchId } = req.params as { matchId: string };
     return reply.send({ data: await signalReady(req.user.sub, matchId) });
   });
 
+  // POST /api/v1/games/matches/:matchId/tap — ReactionTap: submit tap time
   app.post("/matches/:matchId/tap", async (req, reply) => {
     const { matchId } = req.params as { matchId: string };
     const body = z.object({ tapMs: z.number().int() }).parse(req.body);
