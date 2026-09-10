@@ -26,31 +26,18 @@ jobs:
           from pathlib import Path
           p = Path('src/modules/games/matchmaking/matchmaking.service.ts')
           s = p.read_text()
-
           old_call = 'else if (gameType === "pvp_coinflip") await prepareCoinFlipMatch(match.id, player1Id, player2Id, serverSeed);'
           new_call = 'else if (gameType === "pvp_coinflip") await prepareCoinFlipMatch(match.id, player1Id, player2Id, stake, serverSeed);'
           s = s.replace(old_call, new_call)
-
           old_prepare = 'async function prepareCoinFlipMatch(matchId:string,p1Id:string,p2Id:string,serverSeed:string){const clientSeed=generateClientSeed(...[p1Id,p2Id].sort(),matchId);const coinFlip=deriveCoinFlip(serverSeed,clientSeed,1);const winnerId=coinFlip==="heads"?p1Id:p2Id;await db.pvpMatch.updateMany({where:{id:matchId,status:"active"},data:{resultData:JSON.stringify({p1Side:"heads",p2Side:"tails",coinFlip,winnerId}),clientSeed,nonce:1}});}'
           new_prepare = 'async function prepareCoinFlipMatch(matchId:string,p1Id:string,p2Id:string,stake:number,serverSeed:string){const clientSeed=generateClientSeed(...[p1Id,p2Id].sort(),matchId);const coinFlip=deriveCoinFlip(serverSeed,clientSeed,1);const p1Side=randomInt(2)===0?"heads":"tails";const p2Side=p1Side==="heads"?"tails":"heads";const winnerId=coinFlip===p1Side?p1Id:p2Id;const homePlayerId=randomInt(2)===0?p1Id:p2Id;const awayPlayerId=homePlayerId===p1Id?p2Id:p1Id;const feeRate=await getGameFeeRate("pvp_coinflip");const totalPool=stake*2;const platformFee=totalPool*feeRate;const payout=totalPool-platformFee;await db.pvpMatch.updateMany({where:{id:matchId,status:"active"},data:{resultData:JSON.stringify({p1Side,p2Side,coinFlip,winnerId,homePlayerId,awayPlayerId,pool:totalPool,platformFee,payout}),clientSeed,nonce:1}});}'
           if old_prepare in s:
               s = s.replace(old_prepare, new_prepare, 1)
           elif 'const p1Side=randomInt(2)===0?"heads":"tails"' not in s:
               raise SystemExit('Coin Flip preparation function not found')
-
-          # Recovery must use the persisted stake and preserve the prepared authoritative metadata.
-          old_recovery = 'if(!coinFlip||!winnerId){await prepareCoinFlipMatch(matchId,p1Id,p2Id,serverSeed);return;}'
-          new_recovery = 'if(!coinFlip||!winnerId){await prepareCoinFlipMatch(matchId,p1Id,p2Id,stake,serverSeed);return;}'
-          s = s.replace(old_recovery, new_recovery, 1)
-
-          old_settle = 'data:{status:"settled",winnerId,resultData:JSON.stringify({p1Side:"heads",p2Side:"tails",coinFlip,winnerId}),settledAt:new Date(),serverSeed,clientSeed,nonce:result?.nonce??1}'
-          new_settle = 'data:{status:"settled",winnerId,resultData:JSON.stringify({p1Side:result?.p1Side,p2Side:result?.p2Side,coinFlip,winnerId,homePlayerId:result?.homePlayerId,awayPlayerId:result?.awayPlayerId,pool:totalPool,platformFee:fee,payout}),settledAt:new Date(),serverSeed,clientSeed,nonce:result?.nonce??1}'
-          s = s.replace(old_settle, new_settle, 1)
-
-          old_get = 'payout:match.winnerId===userId?totalPool-fee:0'
-          new_get = 'payout:match.gameType==="pvp_coinflip"&&match.resultData?Number((JSON.parse(match.resultData) as any).payout??0):(match.winnerId===userId?totalPool-fee:0)'
-          s = s.replace(old_get, new_get, 1)
-
+          s = s.replace('if(!coinFlip||!winnerId){await prepareCoinFlipMatch(matchId,p1Id,p2Id,serverSeed);return;}', 'if(!coinFlip||!winnerId){await prepareCoinFlipMatch(matchId,p1Id,p2Id,stake,serverSeed);return;}', 1)
+          s = s.replace('data:{status:"settled",winnerId,resultData:JSON.stringify({p1Side:"heads",p2Side:"tails",coinFlip,winnerId}),settledAt:new Date(),serverSeed,clientSeed,nonce:result?.nonce??1}', 'data:{status:"settled",winnerId,resultData:JSON.stringify({p1Side:result?.p1Side,p2Side:result?.p2Side,coinFlip,winnerId,homePlayerId:result?.homePlayerId,awayPlayerId:result?.awayPlayerId,pool:totalPool,platformFee:fee,payout}),settledAt:new Date(),serverSeed,clientSeed,nonce:result?.nonce??1}', 1)
+          s = s.replace('payout:match.winnerId===userId?totalPool-fee:0', 'payout:match.gameType==="pvp_coinflip"&&match.resultData?Number((JSON.parse(match.resultData) as any).payout??0):(match.winnerId===userId?totalPool-fee:0)', 1)
           p.write_text(s)
 
       - name: Verify backend invariants
