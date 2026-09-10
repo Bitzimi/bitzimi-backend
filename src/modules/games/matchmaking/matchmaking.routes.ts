@@ -2,7 +2,7 @@ import { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { authenticate } from "../../../middleware/authenticate";
 import { joinQueue, getQueueStatus, leaveQueue, getMatch, signalReady, submitTap, MatchGameType } from "./matchmaking.service";
-import { joinCoinFlipQueueIdempotent, recoverCoinFlipQueue } from "./coinflip-matchmaking.service";
+import { joinCoinFlipQueueIdempotent, recoverCoinFlipQueue, getCoinFlipHistory } from "./coinflip-matchmaking.service";
 
 const VALID_GAME_TYPES: MatchGameType[] = ["dice_clash", "pvp_coinflip", "reaction_tap"];
 const COIN_FLIP_SYNC_LEAD_MS = 6500;
@@ -24,10 +24,14 @@ export async function matchmakingRoutes(app: FastifyInstance) {
     return reply.status(data.status === "matched" ? 200 : 202).send({ data });
   });
 
-  // Read-only recovery endpoint. It never creates a queue and never debits a wallet.
   app.get("/queue/recover", async (req, reply) => {
     const query = z.object({ gameType: z.literal("pvp_coinflip"), stake: z.coerce.number().positive() }).parse(req.query);
     return reply.send({ data: await recoverCoinFlipQueue(req.user.sub, query.stake) });
+  });
+
+  app.get("/coinflip/history", async (req, reply) => {
+    const query = z.object({ stake: z.coerce.number().positive().optional() }).parse(req.query);
+    return reply.send({ data: await getCoinFlipHistory(req.user.sub, query.stake) });
   });
 
   app.get("/queue/:queueId", async (req, reply) => {
