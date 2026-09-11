@@ -4,7 +4,10 @@ import { authenticate } from "../../../middleware/authenticate";
 import { joinQueue, getQueueStatus, leaveQueue, getMatch, signalReady, submitTap, MatchGameType } from "./matchmaking.service";
 import { joinCoinFlipQueueIdempotent, recoverCoinFlipQueue, getCoinFlipHistory } from "./coinflip-matchmaking.service";
 
-const COIN_FLIP_DURATION_MS = 8000;
+const COIN_FLIP_SIDE_ASSIGNMENT_MS = 8000;
+const COIN_FLIP_ANIMATION_MS = 5000;
+const COIN_FLIP_RESULT_POPUP_MS = 5000;
+const COIN_FLIP_TOTAL_TIMELINE_MS = COIN_FLIP_SIDE_ASSIGNMENT_MS + COIN_FLIP_ANIMATION_MS + COIN_FLIP_RESULT_POPUP_MS;
 
 export async function matchmakingRoutes(app: FastifyInstance) {
   app.addHook("onRequest", authenticate);
@@ -47,9 +50,31 @@ export async function matchmakingRoutes(app: FastifyInstance) {
     const { matchId } = req.params as { matchId: string };
     const data: any = await getMatch(req.user.sub, matchId);
     if (data.gameType === "pvp_coinflip") {
-      data.serverNow = new Date().toISOString();
-      data.animationStartAt = data.createdAt;
-      data.animationDurationMs = COIN_FLIP_DURATION_MS;
+      const nowMs = Date.now();
+      const createdMs = Date.parse(data.createdAt);
+      const elapsedMs = Number.isFinite(createdMs) ? Math.max(0, nowMs - createdMs) : 0;
+      const animationStartAt = new Date(createdMs).toISOString();
+      const sideAssignmentEndsAt = new Date(createdMs + COIN_FLIP_SIDE_ASSIGNMENT_MS).toISOString();
+      const flipEndsAt = new Date(createdMs + COIN_FLIP_SIDE_ASSIGNMENT_MS + COIN_FLIP_ANIMATION_MS).toISOString();
+      const resultPopupEndsAt = new Date(createdMs + COIN_FLIP_TOTAL_TIMELINE_MS).toISOString();
+      const phase = elapsedMs < COIN_FLIP_SIDE_ASSIGNMENT_MS
+        ? "side_assignment"
+        : elapsedMs < COIN_FLIP_SIDE_ASSIGNMENT_MS + COIN_FLIP_ANIMATION_MS
+          ? "flipping"
+          : elapsedMs < COIN_FLIP_TOTAL_TIMELINE_MS
+            ? "result_popup"
+            : "finished";
+      data.serverNow = new Date(nowMs).toISOString();
+      data.phase = phase;
+      data.animationStartAt = animationStartAt;
+      data.sideAssignmentEndsAt = sideAssignmentEndsAt;
+      data.flipEndsAt = flipEndsAt;
+      data.resultPopupEndsAt = resultPopupEndsAt;
+      data.sideAssignmentDurationMs = COIN_FLIP_SIDE_ASSIGNMENT_MS;
+      data.animationDurationMs = COIN_FLIP_ANIMATION_MS;
+      data.resultPopupDurationMs = COIN_FLIP_RESULT_POPUP_MS;
+      data.totalTimelineMs = COIN_FLIP_TOTAL_TIMELINE_MS;
+      data.animationElapsedMs = Math.min(COIN_FLIP_TOTAL_TIMELINE_MS, elapsedMs);
     }
     return reply.send({ data });
   });
