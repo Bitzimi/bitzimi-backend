@@ -1,0 +1,16 @@
+import fs from "node:fs";
+const p="src/modules/games/matchmaking/matchmaking.service.ts";
+let s=fs.readFileSync(p,"utf8");
+const C="const COINFLIP_SIDE_ASSIGNMENT_MS=8000; const COINFLIP_FLIP_MS=5000; const COINFLIP_RESULT_POPUP_MS=5000; const COINFLIP_TOTAL_PRESENTATION_MS=18000;";
+if(!s.includes("COINFLIP_SIDE_ASSIGNMENT_MS"))s=s.replace("const REACTION_TAP_TIMEOUT_MS = 20_000;","const REACTION_TAP_TIMEOUT_MS = 20_000;\n"+C);
+const a=s.indexOf("export async function getMatch(userId:string,matchId:string){");
+const b=s.indexOf("\nexport async function signalReady",a);
+if(a<0||b<0)throw new Error("getMatch markers not found");
+const old=s.slice(a,b);
+const ret=old.match(/return\{[\s\S]*$/)?.[0];
+if(!ret)throw new Error("getMatch return not found");
+const body=old.slice(0,old.indexOf("return{"));
+const newReturn='return{matchId:match.id,gameType:match.gameType,stake:match.stake,totalPool,platformFee:fee,status:match.status,isPlayer1,opponent:{username:opponent.profile?.username??"Player",userId:opponent.id,avatar:opponent.profile?.avatarUrl??null},result,winnerId:match.winnerId,youWon:match.winnerId===userId,payout:match.winnerId===userId?totalPool-fee:0,createdAt:match.createdAt.toISOString(),settledAt:match.settledAt?.toISOString()??null,signalSentAt:match.signalSentAt?.toISOString()??null,yourReady:isPlayer1?match.player1Ready:match.player2Ready,opponentReady:isPlayer1?match.player2Ready:match.player1Ready,serverNow:serverNow.toISOString(),phase,isCoinFlip,animationDurationMs:isCoinFlip?18000:null,animationElapsedMs:isCoinFlip?Math.min(18000,elapsedMs):null,sideAssignmentEndsAt:isCoinFlip?new Date(createdAtMs+8000).toISOString():null,flipEndsAt:isCoinFlip?new Date(createdAtMs+13000).toISOString():null,resultPopupEndsAt:isCoinFlip?new Date(createdAtMs+18000).toISOString():null};';
+const prep='  const result=match.resultData?JSON.parse(match.resultData):null; const serverNow=new Date(); const createdAtMs=match.createdAt.getTime(); const elapsedMs=Math.max(0,serverNow.getTime()-createdAtMs); const isCoinFlip=match.gameType==="pvp_coinflip"; const phase=isCoinFlip?(elapsedMs<8000?"side_assignment":elapsedMs<13000?"flipping":elapsedMs<18000?"result_popup":"finished"):null;\n';
+const fixed=body.replace(/  const result=match\.resultData\?[\s\S]*?;\n/,'')+prep+newReturn+'\n}';
+s=s.slice(0,a)+fixed+s.slice(b);fs.writeFileSync(p,s);console.log("Coin Flip backend phase authority patched");
