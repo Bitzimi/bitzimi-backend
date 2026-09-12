@@ -57,9 +57,10 @@ export async function matchmakingRoutes(app: FastifyInstance) {
       const nowMs = Date.now();
       const createdMs = Date.parse(data.createdAt);
       const elapsedMs = Number.isFinite(createdMs) ? Math.max(0, nowMs - createdMs) : 0;
-      const sideAssignmentEndsAt = new Date(createdMs + COIN_FLIP_SIDE_START_MS).toISOString();
+      const opponentFoundEndsAt = new Date(createdMs + COIN_FLIP_OPPONENT_FOUND_MS).toISOString();
+      const sideAssignmentEndsAt = new Date(createdMs + COIN_FLIP_FLIP_START_MS).toISOString();
       const animationStartAt = sideAssignmentEndsAt;
-      const flipEndsAt = new Date(createdMs + COIN_FLIP_FLIP_START_MS).toISOString();
+      const flipEndsAt = new Date(createdMs + COIN_FLIP_RESULT_START_MS).toISOString();
       const resultPopupEndsAt = new Date(createdMs + COIN_FLIP_TOTAL_TIMELINE_MS).toISOString();
       const phase = elapsedMs < COIN_FLIP_OPPONENT_FOUND_MS
         ? "matched"
@@ -72,10 +73,10 @@ export async function matchmakingRoutes(app: FastifyInstance) {
               : "finished";
       data.serverNow = new Date(nowMs).toISOString();
       data.phase = phase;
-      data.opponentFoundEndsAt = sideAssignmentEndsAt;
-      data.sideAssignmentEndsAt = flipEndsAt;
+      data.opponentFoundEndsAt = opponentFoundEndsAt;
+      data.sideAssignmentEndsAt = sideAssignmentEndsAt;
       data.animationStartAt = animationStartAt;
-      data.flipEndsAt = new Date(createdMs + COIN_FLIP_RESULT_START_MS).toISOString();
+      data.flipEndsAt = flipEndsAt;
       data.resultPopupEndsAt = resultPopupEndsAt;
       data.opponentFoundDurationMs = COIN_FLIP_OPPONENT_FOUND_MS;
       data.sideAssignmentDurationMs = COIN_FLIP_SIDE_ASSIGNMENT_MS;
