@@ -8,7 +8,7 @@ import { createGameFeeJobInTx } from "../../affiliates/commissions";
 import { activateReferral } from "../../referrals/referrals.service";
 
 // Waiting players heartbeat through polling. The lease is deliberately longer than
-a normal browser/network hiccup so a legitimate player is not kicked while the
+// a normal browser/network hiccup so a legitimate player is not kicked while the
 // backend is waking from a Render Free cold start or a request is delayed.
 const QUEUE_TTL_MS = 5 * 60_000;
 const SIGNAL_DELAY_MS = [1000, 2000, 3000, 4000, 5000];
@@ -66,7 +66,7 @@ export async function getQueueStatus(userId: string, queueId: string) {
   }
   return { status: "waiting" as const };
 }
-export async function leaveQueue(userId: string, queueId: string) { await db.$transaction(async tx => { const entry = await tx.matchmakingQueue.findFirst({ where: { id: queueId, userId } }); if (!entry) return; if (entry.status === "reserved") { const claimed = await tx.matchmakingQueue.updateMany({ where: { id: queueId, userId, status: "reserved" }, data: { status: "cancelled" } }); if (claimed.count) await creditWallet(tx, userId, "game", entry.stake); } else if (entry.status === "waiting") await tx.matchmakingQueue.updateMany({ where: { id: queueId, userId, status: "waiting" }, data: { status: "cancelled" }); }); }
+export async function leaveQueue(userId: string, queueId: string) { await db.$transaction(async tx => { const entry = await tx.matchmakingQueue.findFirst({ where: { id: queueId, userId } }); if (!entry) return; if (entry.status === "reserved") { const claimed = await tx.matchmakingQueue.updateMany({ where: { id: queueId, userId, status: "reserved" }, data: { status: "cancelled" } }); if (claimed.count) await creditWallet(tx, userId, "game", entry.stake); } else if (entry.status === "waiting") await tx.matchmakingQueue.updateMany({ where: { id: queueId, userId, status: "waiting" }, data: { status: "cancelled" } }); }); }
 async function createGameNotification(tx: any, userId: string, won: boolean, gameName: string, stake: number, payout: number, opponentId: string) {
   await tx.notification.create({ data: { userId, type: won ? "game_win" : "game_loss", title: won ? `🎉 ${gameName} Victory!` : `${gameName} Result`, message: won ? `You won $${payout.toFixed(2)} after staking $${stake.toFixed(2)}.` : `You lost $${stake.toFixed(2)} in ${gameName}.`, metadata: JSON.stringify({ game: gameName.toLowerCase().replace(/\s+/g, "_"), stake, payout, opponentId }) } });
 }
