@@ -20,6 +20,7 @@ const createMatch = `export async function createMatchForPlayers(player1Id: stri
   const totalPool = stake * 2; const feeRate = await getGameFeeRate(gameType); const fee = totalPool * feeRate;
   const serverSeed = generateServerSeed(); const serverSeedHash = hashServerSeed(serverSeed);
   const verificationId = gameType === "reaction_tap" ? undefined : generateVerificationId(gameType);
+  if (gameType === "pvp_coinflip" && randomInt(2) === 1) [player1Id, player2Id] = [player2Id, player1Id];
   const match = await db.$transaction(async tx => {
     for (const pid of [player1Id, player2Id]) await debitWallet(tx, pid, "game", stake);
     return tx.pvpMatch.create({ data: { gameType, stake, player1Id, player2Id, serverSeedHash, verificationId, ...(gameType === "pvp_coinflip" ? { serverSeed } : {}) } });
@@ -35,6 +36,7 @@ export async function createReservedMatchForPlayers(player1Id: string, player2Id
   const totalPool = stake * 2; const feeRate = await getGameFeeRate(gameType); const fee = totalPool * feeRate;
   const serverSeed = generateServerSeed(); const serverSeedHash = hashServerSeed(serverSeed);
   const verificationId = gameType === "reaction_tap" ? undefined : generateVerificationId(gameType);
+  if (gameType === "pvp_coinflip" && randomInt(2) === 1) [player1Id, player2Id] = [player2Id, player1Id];
   const match = await db.pvpMatch.create({ data: { gameType, stake, player1Id, player2Id, serverSeedHash, verificationId, ...(gameType === "pvp_coinflip" ? { serverSeed } : {}) } });
   try {
     if (gameType === "dice_clash") await resolveDiceClash(match.id, player1Id, player2Id, stake, fee, totalPool, serverSeed, feeRate);
@@ -49,8 +51,10 @@ s = between(s, "export async function createMatchForPlayers", "async function re
 const coinflipResolver = `async function prepareCoinFlipMatch(matchId:string,p1Id:string,p2Id:string,serverSeed:string){
   const clientSeed=generateClientSeed(...[p1Id,p2Id].sort(),matchId);
   const coinFlip=deriveCoinFlip(serverSeed,clientSeed,1);
-  const winnerId=coinFlip==="heads"?p1Id:p2Id;
-  await db.pvpMatch.updateMany({where:{id:matchId,status:"active"},data:{resultData:JSON.stringify({p1Side:"heads",p2Side:"tails",coinFlip,winnerId}),clientSeed,nonce:1}});
+  const p1Side: "heads" | "tails" = randomInt(2) === 0 ? "heads" : "tails";
+  const p2Side: "heads" | "tails" = p1Side === "heads" ? "tails" : "heads";
+  const winnerId=coinFlip===p1Side?p1Id:p2Id;
+  await db.pvpMatch.updateMany({where:{id:matchId,status:"active"},data:{resultData:JSON.stringify({p1Side,p2Side,coinFlip,winnerId}),clientSeed,nonce:1}});
 }
 
 async function resolveCoinFlip(matchId:string,p1Id:string,p2Id:string,stake:number,fee:number,totalPool:number,serverSeed:string,feeRate:number){
@@ -63,7 +67,7 @@ async function resolveCoinFlip(matchId:string,p1Id:string,p2Id:string,stake:numb
   const payout=totalPool-fee;
   const clientSeed=result?.clientSeed??generateClientSeed(...[p1Id,p2Id].sort(),matchId);
   await db.$transaction(async tx=>{
-    const guard=await tx.pvpMatch.updateMany({where:{id:matchId,status:"active"},data:{status:"settled",winnerId,resultData:JSON.stringify({p1Side:"heads",p2Side:"tails",coinFlip,winnerId}),settledAt:new Date(),serverSeed,clientSeed,nonce:result?.nonce??1}});
+    const guard=await tx.pvpMatch.updateMany({where:{id:matchId,status:"active"},data:{status:"settled",winnerId,resultData:JSON.stringify({p1Side:result.p1Side,p2Side:result.p2Side,coinFlip,winnerId}),settledAt:new Date(),serverSeed,clientSeed,nonce:result?.nonce??1}});
     if(!guard.count)return;
     await creditWallet(tx,winnerId,"game",payout);
     await writeLedgerEntry(tx,{userId:winnerId,type:"game_win",toWallet:"game",amount:payout,description:"Coin Flip win",referenceId:matchId,referenceType:"pvp_match"});
@@ -115,4 +119,4 @@ s = s.replace(
 );
 
 fs.writeFileSync(path, s);
-console.log("Applied Coin Flip 8-second authoritative settlement and recovery.");
+console.log("Applied Coin Flip authoritative side assignment and 8-second settlement.");
