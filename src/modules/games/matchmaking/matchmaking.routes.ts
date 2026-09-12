@@ -7,11 +7,13 @@ import { joinCoinFlipQueueIdempotent, recoverCoinFlipQueue, getCoinFlipHistory }
 const COIN_FLIP_OPPONENT_FOUND_MS = 10000;
 const COIN_FLIP_SIDE_ASSIGNMENT_MS = 8000;
 const COIN_FLIP_ANIMATION_MS = 5000;
+const COIN_FLIP_RESULT_DISPLAY_MS = 4000;
 const COIN_FLIP_RESULT_POPUP_MS = 12000;
 const COIN_FLIP_SIDE_START_MS = COIN_FLIP_OPPONENT_FOUND_MS;
 const COIN_FLIP_FLIP_START_MS = COIN_FLIP_SIDE_START_MS + COIN_FLIP_SIDE_ASSIGNMENT_MS;
 const COIN_FLIP_RESULT_START_MS = COIN_FLIP_FLIP_START_MS + COIN_FLIP_ANIMATION_MS;
-const COIN_FLIP_TOTAL_TIMELINE_MS = COIN_FLIP_RESULT_START_MS + COIN_FLIP_RESULT_POPUP_MS;
+const COIN_FLIP_POPUP_START_MS = COIN_FLIP_RESULT_START_MS + COIN_FLIP_RESULT_DISPLAY_MS;
+const COIN_FLIP_TOTAL_TIMELINE_MS = COIN_FLIP_POPUP_START_MS + COIN_FLIP_RESULT_POPUP_MS;
 
 export async function matchmakingRoutes(app: FastifyInstance) {
   app.addHook("onRequest", authenticate);
@@ -59,8 +61,9 @@ export async function matchmakingRoutes(app: FastifyInstance) {
       const elapsedMs = Number.isFinite(createdMs) ? Math.max(0, nowMs - createdMs) : 0;
       const opponentFoundEndsAt = new Date(createdMs + COIN_FLIP_OPPONENT_FOUND_MS).toISOString();
       const sideAssignmentEndsAt = new Date(createdMs + COIN_FLIP_FLIP_START_MS).toISOString();
-      const animationStartAt = sideAssignmentEndsAt;
+      const animationStartAt = new Date(createdMs + COIN_FLIP_FLIP_START_MS).toISOString();
       const flipEndsAt = new Date(createdMs + COIN_FLIP_RESULT_START_MS).toISOString();
+      const resultDisplayEndsAt = new Date(createdMs + COIN_FLIP_POPUP_START_MS).toISOString();
       const resultPopupEndsAt = new Date(createdMs + COIN_FLIP_TOTAL_TIMELINE_MS).toISOString();
       const phase = elapsedMs < COIN_FLIP_OPPONENT_FOUND_MS
         ? "matched"
@@ -68,19 +71,23 @@ export async function matchmakingRoutes(app: FastifyInstance) {
           ? "side_assignment"
           : elapsedMs < COIN_FLIP_RESULT_START_MS
             ? "flipping"
-            : elapsedMs < COIN_FLIP_TOTAL_TIMELINE_MS
-              ? "result_popup"
-              : "finished";
+            : elapsedMs < COIN_FLIP_POPUP_START_MS
+              ? "result_display"
+              : elapsedMs < COIN_FLIP_TOTAL_TIMELINE_MS
+                ? "result_popup"
+                : "finished";
       data.serverNow = new Date(nowMs).toISOString();
       data.phase = phase;
       data.opponentFoundEndsAt = opponentFoundEndsAt;
       data.sideAssignmentEndsAt = sideAssignmentEndsAt;
       data.animationStartAt = animationStartAt;
       data.flipEndsAt = flipEndsAt;
+      data.resultDisplayEndsAt = resultDisplayEndsAt;
       data.resultPopupEndsAt = resultPopupEndsAt;
       data.opponentFoundDurationMs = COIN_FLIP_OPPONENT_FOUND_MS;
       data.sideAssignmentDurationMs = COIN_FLIP_SIDE_ASSIGNMENT_MS;
       data.animationDurationMs = COIN_FLIP_ANIMATION_MS;
+      data.resultDisplayDurationMs = COIN_FLIP_RESULT_DISPLAY_MS;
       data.resultPopupDurationMs = COIN_FLIP_RESULT_POPUP_MS;
       data.totalTimelineMs = COIN_FLIP_TOTAL_TIMELINE_MS;
       data.timelineElapsedMs = Math.min(COIN_FLIP_TOTAL_TIMELINE_MS, elapsedMs);
@@ -97,6 +104,6 @@ export async function matchmakingRoutes(app: FastifyInstance) {
   app.post("/matches/:matchId/tap", async (req, reply) => {
     const { matchId } = req.params as { matchId: string };
     const body = z.object({ tapMs: z.number().int() }).parse(req.body);
-    return reply.send({ data: await submitTap(req.user.sub, matchId, body.tapMs) });
+    return reply.send({ data: await submitTap(req.user.sub, matchId, body.tapMs });
   });
 }
