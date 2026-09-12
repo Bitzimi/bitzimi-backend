@@ -104,6 +104,6 @@ export async function matchmakingRoutes(app: FastifyInstance) {
   app.post("/matches/:matchId/tap", async (req, reply) => {
     const { matchId } = req.params as { matchId: string };
     const body = z.object({ tapMs: z.number().int() }).parse(req.body);
-    return reply.send({ data: await submitTap(req.user.sub, matchId, body.tapMs });
+    return reply.send({ data: await submitTap(req.user.sub, matchId, body.tapMs) });
   });
 }
