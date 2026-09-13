@@ -1,6 +1,7 @@
 import { randomInt } from "crypto";
 import { db } from "../../../db";
 import { createMatchForPlayers, MatchGameType } from "../matchmaking/matchmaking.service";
+import { createCoinFlipMatchForPlayers } from "../matchmaking/coinFlipMatchmaking.service";
 import { getConfigValue } from "../../admin/config/admin.config.service";
 import { activateReferral } from "../../referrals/referrals.service";
 
@@ -21,6 +22,12 @@ async function validateGame(gameType: string, stake: number) {
   if (!enabled) throw Object.assign(new Error(`${gameType} is currently unavailable`), { statusCode: 503, code: "GAME_DISABLED" });
   if (maintenance) throw Object.assign(new Error(`${gameType} is under maintenance`), { statusCode: 503, code: "GAME_MAINTENANCE" });
   if (stakes.length && !stakes.includes(stake)) throw Object.assign(new Error(`Stake $${stake} is not available for this game`), { statusCode: 400, code: "INVALID_STAKE" });
+}
+
+async function createRoomMatch(player1Id: string, player2Id: string, gameType: MatchGameType, stake: number) {
+  return gameType === "pvp_coinflip"
+    ? createCoinFlipMatchForPlayers(player1Id, player2Id, stake)
+    : createMatchForPlayers(player1Id, player2Id, gameType, stake);
 }
 
 export async function createRoom(hostId: string, gameType: string, stake: number) {
@@ -68,7 +75,7 @@ async function claimRoomStart(code: string, userId: string) {
 export async function startMatch(code: string, userId: string) {
   const room = await claimRoomStart(code, userId);
   try {
-    const match = await createMatchForPlayers(room.hostId, room.guestId!, room.gameType as MatchGameType, room.stake);
+    const match = await createRoomMatch(room.hostId, room.guestId!, room.gameType as MatchGameType, room.stake);
     const updated = await db.privateRoom.updateMany({ where: { id: room.id, status: "starting" }, data: { status: "active", currentMatchId: match.id } });
     if (!updated.count) throw new Error("Room start state was lost");
     setImmediate(() => { activateReferral(room.hostId).catch(() => {}); activateReferral(room.guestId!).catch(() => {}); });
@@ -82,7 +89,7 @@ export async function startMatch(code: string, userId: string) {
 export async function signalRematch(code: string, userId: string) {
   const ready = await db.$transaction(async tx => {
     await tx.$queryRaw`SELECT id FROM private_rooms WHERE code = ${code} FOR UPDATE`;
-    const room = await tx.privateRoom.findUnique({ where: { code } });
+    const room = await tx.privateRoom.findUnique({ where: { id: ready.id } }).catch(() => null);
     if (!room) throw Object.assign(new Error("Room not found"), { statusCode: 404, code: "NOT_FOUND" });
     if (room.hostId !== userId && room.guestId !== userId) throw Object.assign(new Error("Access denied"), { statusCode: 403, code: "FORBIDDEN" });
     if (!["active", "rematch"].includes(room.status)) throw Object.assign(new Error("Cannot request rematch at this stage"), { statusCode: 409, code: "INVALID_STATE" });
@@ -99,7 +106,7 @@ export async function signalRematch(code: string, userId: string) {
     return room;
   });
   try {
-    const match = await createMatchForPlayers(claimed.hostId, claimed.guestId!, claimed.gameType as MatchGameType, claimed.stake);
+    const match = await createRoomMatch(claimed.hostId, claimed.guestId!, claimed.gameType as MatchGameType, claimed.stake);
     await db.privateRoom.updateMany({ where: { id: claimed.id, status: "starting" }, data: { status: "active", currentMatchId: match.id, rematchHostReady: false, rematchGuestReady: false } });
     return { status: "started" as const, matchId: match.id, room: await withProfiles(claimed) };
   } catch (err) {
