@@ -25,9 +25,7 @@ async function validateGame(gameType: string, stake: number) {
 }
 
 async function createRoomMatch(player1Id: string, player2Id: string, gameType: MatchGameType, stake: number) {
-  return gameType === "pvp_coinflip"
-    ? createCoinFlipMatchForPlayers(player1Id, player2Id, stake)
-    : createMatchForPlayers(player1Id, player2Id, gameType, stake);
+  return gameType === "pvp_coinflip" ? createCoinFlipMatchForPlayers(player1Id, player2Id, stake) : createMatchForPlayers(player1Id, player2Id, gameType, stake);
 }
 
 export async function createRoom(hostId: string, gameType: string, stake: number) {
@@ -89,7 +87,7 @@ export async function startMatch(code: string, userId: string) {
 export async function signalRematch(code: string, userId: string) {
   const ready = await db.$transaction(async tx => {
     await tx.$queryRaw`SELECT id FROM private_rooms WHERE code = ${code} FOR UPDATE`;
-    const room = await tx.privateRoom.findUnique({ where: { id: ready.id } }).catch(() => null);
+    const room = await tx.privateRoom.findUnique({ where: { code } });
     if (!room) throw Object.assign(new Error("Room not found"), { statusCode: 404, code: "NOT_FOUND" });
     if (room.hostId !== userId && room.guestId !== userId) throw Object.assign(new Error("Access denied"), { statusCode: 403, code: "FORBIDDEN" });
     if (!["active", "rematch"].includes(room.status)) throw Object.assign(new Error("Cannot request rematch at this stage"), { statusCode: 409, code: "INVALID_STATE" });
