@@ -13,7 +13,7 @@
  *   - Dice Clash / Coin Flip: result generated immediately when match is created.
  *   - Reaction Tap: server sets signalSentAt when both players ready; players
  *     submit tap times via POST /games/matches/:matchId/tap; server settles
- *     when both submitted.
+ *     when both have submitted.
  *
  * Commission: fires on EVERY player's fee (win OR loss) — Section D.
  * Queue TTL: 5 minutes. Expired entries cleaned up by ticker.
@@ -277,6 +277,8 @@ export async function getMatch(userId: string, matchId: string) {
   const totalPool  = match.stake * 2;
   const feeRate    = await getGameFeeRate(match.gameType as MatchGameType);
   const fee        = totalPool * feeRate;
+  const opponentUsername = opponent.profile?.username ?? "Player";
+  const opponentAvatar = opponent.profile?.avatarUrl ?? (opponentUsername.charAt(0).toUpperCase() || "?");
 
   return {
     matchId:       match.id,
@@ -287,9 +289,11 @@ export async function getMatch(userId: string, matchId: string) {
     status:        match.status,
     isPlayer1,
     opponent: {
-      username:    opponent.profile?.username ?? "Player",
+      username:    opponentUsername,
       userId:      opponent.id,
-      avatar:      opponent.profile?.avatarUrl || opponent.profile?.username?.charAt(0).toUpperCase() || "?",
+      // Canonical participant identity avatar: this is the same profile-backed
+      // avatar value that the platform IdentityContext hydrates as identity.avatar.
+      avatar:      opponentAvatar,
     },
     result:        resultData,
     winnerId:      match.winnerId,
