@@ -265,8 +265,8 @@ export async function getMatch(userId: string, matchId: string) {
   const match = await db.pvpMatch.findFirst({
     where: { id: matchId, OR: [{ player1Id: userId }, { player2Id: userId }] },
     include: {
-      player1: { include: { profile: { select: { username: true } } } },
-      player2: { include: { profile: { select: { username: true } } } },
+      player1: { include: { profile: { select: { username: true, avatarUrl: true } } } },
+      player2: { include: { profile: { select: { username: true, avatarUrl: true } } } },
     },
   });
   if (!match) throw Object.assign(new Error("Match not found"), { statusCode: 404, code: "NOT_FOUND" });
@@ -289,6 +289,7 @@ export async function getMatch(userId: string, matchId: string) {
     opponent: {
       username:    opponent.profile?.username ?? "Player",
       userId:      opponent.id,
+      avatar:      opponent.profile?.avatarUrl || opponent.profile?.username?.charAt(0).toUpperCase() || "?",
     },
     result:        resultData,
     winnerId:      match.winnerId,
