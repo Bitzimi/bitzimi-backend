@@ -116,6 +116,7 @@ export async function settleCoinFlip(userId: string, matchId: string) {
     if (!claimed.count) return null;
     await creditWallet(tx, winnerId, "game", payout);
     await writeLedgerEntry(tx, { userId: winnerId, type: "game_win", toWallet: "game", amount: payout, description: "Coin flip win", referenceId: matchId, referenceType: "pvp_match" });
+    await writeLedgerEntry(tx, { userId: loserId, type: "game_loss", fromWallet: "game", amount: match.stake, description: "Coin flip loss", referenceId: matchId, referenceType: "pvp_match" });
     await tx.pvpMatch.update({ where: { id: matchId }, data: { status: "settled", winnerId, settledAt: new Date(), clientSeed, nonce: 1 } });
     await recordGameResult({ tx, userId: winnerId, gameType: "pvp_coinflip", wagered: match.stake, won: true, payout });
     await recordGameResult({ tx, userId: loserId, gameType: "pvp_coinflip", wagered: match.stake, won: false, payout: 0 });
