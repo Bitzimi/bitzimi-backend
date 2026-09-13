@@ -9,54 +9,42 @@ const VALID_GAME_TYPES: MatchGameType[] = ["dice_clash", "pvp_coinflip", "reacti
 export async function matchmakingRoutes(app: FastifyInstance) {
   app.addHook("onRequest", authenticate);
 
-  // POST /api/v1/games/queue — join matchmaking queue
   app.post("/queue", async (req, reply) => {
-    const body = z.object({
-      gameType: z.enum(["dice_clash", "pvp_coinflip", "reaction_tap"]),
-      stake:    z.number().positive(),
-    }).parse(req.body);
-    const data = body.gameType === "pvp_coinflip"
-      ? await joinCoinFlipQueue(req.user.sub, body.stake)
-      : await joinQueue(req.user.sub, body.gameType, body.stake);
+    const body = z.object({ gameType: z.enum(["dice_clash", "pvp_coinflip", "reaction_tap"]), stake: z.number().positive() }).parse(req.body);
+    const data = body.gameType === "pvp_coinflip" ? await joinCoinFlipQueue(req.user.sub, body.stake) : await joinQueue(req.user.sub, body.gameType, body.stake);
     return reply.status(data.status === "matched" ? 200 : 202).send({ data });
   });
 
-  // GET /api/v1/games/queue/:queueId — poll queue status
   app.get("/queue/:queueId", async (req, reply) => {
     const { queueId } = req.params as { queueId: string };
     return reply.send({ data: await getQueueStatus(req.user.sub, queueId) });
   });
 
-  // DELETE /api/v1/games/queue/:queueId — leave queue
   app.delete("/queue/:queueId", async (req, reply) => {
     const { queueId } = req.params as { queueId: string };
     await leaveQueue(req.user.sub, queueId);
     return reply.status(204).send();
   });
 
-  // GET /api/v1/games/matches/:matchId — get match state and result
   app.get("/matches/:matchId", async (req, reply) => {
     const { matchId } = req.params as { matchId: string };
-    const match = await getMatch(req.user.sub, matchId).catch(async err => {
+    const match = await getCoinFlipMatch(req.user.sub, matchId).catch(async err => {
       if ((err as any)?.statusCode !== 404) throw err;
-      return getCoinFlipMatch(req.user.sub, matchId);
+      return getMatch(req.user.sub, matchId);
     });
     return reply.send({ data: match });
   });
 
-  // POST /api/v1/games/matches/:matchId/settle — Coin Flip: acknowledge result reveal and settle funds
   app.post("/matches/:matchId/settle", async (req, reply) => {
     const { matchId } = req.params as { matchId: string };
     return reply.send({ data: await settleCoinFlip(req.user.sub, matchId) });
   });
 
-  // POST /api/v1/games/matches/:matchId/ready — ReactionTap: signal ready
   app.post("/matches/:matchId/ready", async (req, reply) => {
     const { matchId } = req.params as { matchId: string };
     return reply.send({ data: await signalReady(req.user.sub, matchId) });
   });
 
-  // POST /api/v1/games/matches/:matchId/tap — ReactionTap: submit tap time
   app.post("/matches/:matchId/tap", async (req, reply) => {
     const { matchId } = req.params as { matchId: string };
     const body = z.object({ tapMs: z.number().int() }).parse(req.body);
