@@ -24,7 +24,22 @@ export function verifyFairness(input:VerifyInput):VerifyOutput{
  try{
   switch(input.gameType){
    case "color_game": { computedResult=deriveColorResult(input.serverSeed,input.clientSeed,input.nonce); resultValid=input.claimedResult!=null?computedResult===input.claimedResult:null; explanation="Color is derived from byte 0 of HMAC-SHA256: even = red, odd = blue."; break; }
-   case "pvp_coinflip": { const coinFlip=deriveCoinFlip(input.serverSeed,input.clientSeed,input.nonce); const p1Side=deriveCoinFlip(input.serverSeed,input.clientSeed,input.nonce+2); const p2Side=p1Side==="heads"?"tails":"heads"; const ids=(input.playerIds??[]).map(String); const homePlayerId=ids.length>=2 ? (deriveCoinFlip(input.serverSeed,input.clientSeed,input.nonce+1)==="heads" ? ids[0] : ids[1]) : null; computedResult={coinFlip,p1Side,p2Side,homePlayerId}; const claimed=input.claimedResult; resultValid=claimed?.coinFlip!=null ? coinFlip===claimed.coinFlip && (claimed.p1Side==null || claimed.p1Side===p1Side) && (claimed.p2Side==null || claimed.p2Side===p2Side) && (claimed.homePlayerId==null || claimed.homePlayerId===homePlayerId) : null; explanation="Coin outcome, participant Heads/Tails assignment, and Home/Away assignment are independently derived from distinct HMAC-SHA256 nonces."; break; }
+   case "pvp_coinflip": {
+    const coinFlip=deriveCoinFlip(input.serverSeed,input.clientSeed,input.nonce);
+    const ids=(input.playerIds??[]).map(String);
+    const sortedIds=[...ids].sort();
+    const firstSortedPlayerSide=deriveCoinFlip(input.serverSeed,input.clientSeed,input.nonce+2);
+    const sideByUserId:Record<string,"heads"|"tails">={};
+    if(sortedIds.length>=2){sideByUserId[sortedIds[0]]=firstSortedPlayerSide;sideByUserId[sortedIds[1]]=firstSortedPlayerSide==="heads"?"tails":"heads";}
+    const p1Side=ids.length>=1?sideByUserId[ids[0]]:undefined;
+    const p2Side=ids.length>=2?sideByUserId[ids[1]]:undefined;
+    const homePlayerId=sortedIds.length>=2 ? (deriveCoinFlip(input.serverSeed,input.clientSeed,input.nonce+1)==="heads" ? sortedIds[0] : sortedIds[1]) : null;
+    computedResult={coinFlip,p1Side,p2Side,homePlayerId};
+    const claimed=input.claimedResult;
+    resultValid=claimed?.coinFlip!=null ? coinFlip===claimed.coinFlip && (claimed.p1Side==null || claimed.p1Side===p1Side) && (claimed.p2Side==null || claimed.p2Side===p2Side) && (claimed.homePlayerId==null || claimed.homePlayerId===homePlayerId) : null;
+    explanation="Coin outcome, participant Heads/Tails assignment, and Home/Away assignment are independently derived from distinct HMAC-SHA256 nonces; participant ordering is normalized by stable user IDs.";
+    break;
+   }
    case "dice_clash": { computedResult=deriveDiceClash(input.serverSeed,input.clientSeed,input.nonce); resultValid=input.claimedResult?.p1Roll!=null?computedResult.p1Roll===input.claimedResult.p1Roll&&computedResult.p2Roll===input.claimedResult.p2Roll:null; explanation="Both dice rolls are deterministically derived from HMAC-SHA256; equal rolls use the deterministic tie-break derivation."; break; }
    case "spin_battle": { const weights=input.claimedResult?.playerBets as Record<string,number>|undefined,ids=input.claimedResult?.playerIds as string[]|undefined; if(!weights||!ids?.length){explanation="Stake-proportional verification requires the settled player IDs and locked stakes.";break;}const ordered=[...ids].sort(),weightObject=Object.fromEntries(ordered.map(id=>[id,Number(weights[id]??0)]));const winner=deriveSpinWinner(input.serverSeed,input.clientSeed,input.nonce,ordered,weightObject);computedResult={winner};resultValid=input.claimedResult?.winner!=null?winner===input.claimedResult.winner:null;explanation="Winner is selected from locked stakes using unbiased 64-bit HMAC sampling.";break; }
    case "dice_royale":
