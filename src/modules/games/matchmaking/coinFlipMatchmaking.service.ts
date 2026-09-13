@@ -44,8 +44,6 @@ export async function createCoinFlipMatchForPlayers(player1Id: string, player2Id
   const feeRate = await getGameFeeRate("pvp_coinflip");
   const fee = totalPool * feeRate;
 
-  // Match creation and both stake deductions remain backend-authoritative. The
-  // transaction completes before the match is exposed as matched to either client.
   await db.$transaction(async tx => {
     for (const pid of [player1Id, player2Id]) {
       await debitWallet(tx, pid, "game", stake);
@@ -58,10 +56,9 @@ export async function createCoinFlipMatchForPlayers(player1Id: string, player2Id
   const verificationId = generateVerificationId("pvp_coinflip");
   const match = await db.pvpMatch.create({ data: { gameType: "pvp_coinflip", stake, player1Id, player2Id, serverSeedHash, verificationId } });
 
-  // Participant order in the matchmaking request is deliberately NOT used as
-  // the assignment rule. Both assignments are derived from stable sorted IDs.
-  // Home/Away and Heads/Tails use distinct nonces, so neither assignment
-  // determines or implies the other.
+  // Assignment version 2 deliberately normalizes participant order by stable user ID.
+  // Home/Away and Heads/Tails are separate deterministic draws and neither depends
+  // on which participant triggered the matchmaking request first.
   const sortedPlayerIds = [player1Id, player2Id].sort();
   const clientSeed = generateClientSeed(...sortedPlayerIds, match.id);
   const homeIsFirstSortedPlayer = deriveCoinFlip(serverSeed, clientSeed, 2) === "heads";
@@ -78,7 +75,7 @@ export async function createCoinFlipMatchForPlayers(player1Id: string, player2Id
   const coinFlip = deriveCoinFlip(serverSeed, clientSeed, 1);
   const winnerId = coinFlip === sideByUserId[player1Id] ? player1Id : player2Id;
 
-  const resultData = JSON.stringify({ homePlayerId, awayPlayerId, p1Side, p2Side, coinFlip, winnerId });
+  const resultData = JSON.stringify({ assignmentVersion: 2, homePlayerId, awayPlayerId, p1Side, p2Side, coinFlip, winnerId });
   return db.pvpMatch.update({ where: { id: match.id }, data: { resultData, clientSeed, nonce: 1, serverSeed } });
 }
 
@@ -104,9 +101,7 @@ export async function settleCoinFlip(userId: string, matchId: string) {
     const feeRate = await getGameFeeRate("pvp_coinflip");
     return { settled: true, winnerId: resultData.winnerId ?? match.winnerId, payout: match.stake * 2 - match.stake * 2 * feeRate };
   }
-  if (match.status === "settling") {
-    throw Object.assign(new Error("Coin Flip settlement is still in progress"), { statusCode: 409, code: "SETTLEMENT_IN_PROGRESS" });
-  }
+  if (match.status === "settling") throw Object.assign(new Error("Coin Flip settlement is still in progress"), { statusCode: 409, code: "SETTLEMENT_IN_PROGRESS" });
   if (match.status !== "active") throw Object.assign(new Error("Coin Flip match is not ready for settlement"), { statusCode: 409, code: "MATCH_NOT_SETTLEABLE" });
   const resultData = match.resultData ? JSON.parse(match.resultData) : null;
   if (!resultData?.winnerId || !resultData?.coinFlip || !resultData?.p1Side || !resultData?.p2Side) throw Object.assign(new Error("Coin Flip result is not ready"), { statusCode: 409, code: "RESULT_NOT_READY" });
