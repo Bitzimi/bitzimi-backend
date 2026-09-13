@@ -17,36 +17,21 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Patch matchmaking response on main
+      - name: Move patched matchmaking service into source tree
         shell: bash
         run: |
           git fetch origin main
           git checkout -B main origin/main
 
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path("src/modules/games/matchmaking/matchmaking.service.ts")
-          text = path.read_text()
-
-          old_include = 'player1: { include: { profile: { select: { username: true } } } },\n      player2: { include: { profile: { select: { username: true } } } },'
-          new_include = 'player1: { include: { profile: { select: { username: true, avatarUrl: true } } } },\n      player2: { include: { profile: { select: { username: true, avatarUrl: true } } } },'
-          if text.count(old_include) != 1:
-              raise SystemExit(f"Expected exactly one match include block, found {text.count(old_include)}")
-          text = text.replace(old_include, new_include, 1)
-
-          old_opponent = '      username:    opponent.profile?.username ?? "Player",\n      userId:      opponent.id,'
-          new_opponent = '      username:    opponent.profile?.username ?? "Player",\n      userId:      opponent.id,\n      avatar:      opponent.profile?.avatarUrl || opponent.profile?.username?.charAt(0).toUpperCase() || "?",'
-          if text.count(old_opponent) != 1:
-              raise SystemExit(f"Expected exactly one opponent response block, found {text.count(old_opponent)}")
-          text = text.replace(old_opponent, new_opponent, 1)
-
-          path.write_text(text)
-          PY
+          test -f modules/games/matchmaking/matchmaking.service.ts
+          test -f src/modules/games/matchmaking/matchmaking.service.ts
+          cp modules/games/matchmaking/matchmaking.service.ts src/modules/games/matchmaking/matchmaking.service.ts
+          rm -f modules/games/matchmaking/matchmaking.service.ts
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/modules/games/matchmaking/matchmaking.service.ts
+          git add -A
           git diff --cached --check
+          git diff --cached -- src/modules/games/matchmaking/matchmaking.service.ts
           git commit -m "fix: return canonical opponent avatar in match result"
           git push origin main
