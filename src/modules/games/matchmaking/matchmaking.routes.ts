@@ -1,7 +1,7 @@
 import { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { authenticate } from "../../../middleware/authenticate";
-import { joinQueue, getQueueStatus, leaveQueue, getMatch, signalReady, submitTap, MatchGameType } from "./matchmaking.service";
+import { joinQueue, getQueueStatus, leaveQueue, getMatch, settleCoinFlip, signalReady, submitTap, MatchGameType } from "./matchmaking.service";
 
 const VALID_GAME_TYPES: MatchGameType[] = ["dice_clash", "pvp_coinflip", "reaction_tap"];
 
@@ -35,6 +35,12 @@ export async function matchmakingRoutes(app: FastifyInstance) {
   app.get("/matches/:matchId", async (req, reply) => {
     const { matchId } = req.params as { matchId: string };
     return reply.send({ data: await getMatch(req.user.sub, matchId) });
+  });
+
+  // POST /api/v1/games/matches/:matchId/settle — Coin Flip: acknowledge result reveal and settle funds
+  app.post("/matches/:matchId/settle", async (req, reply) => {
+    const { matchId } = req.params as { matchId: string };
+    return reply.send({ data: await settleCoinFlip(req.user.sub, matchId) });
   });
 
   // POST /api/v1/games/matches/:matchId/ready — ReactionTap: signal ready
