@@ -90,7 +90,7 @@ export async function getCoinFlipMatch(userId: string, matchId: string) {
   const fee = totalPool * feeRate;
   const opponentUsername = opponent.profile?.username ?? "Player";
   const opponentAvatar = opponent.profile?.avatarUrl ?? (opponentUsername.charAt(0).toUpperCase() || "?");
-  return { matchId: match.id, gameType: match.gameType, stake: match.stake, totalPool, platformFee: fee, status: match.status, isPlayer1, playerIsHome: resultData?.homePlayerId === userId, opponent: { username: opponentUsername, userId: opponent.id, avatar: opponentAvatar }, result: resultData, winnerId: match.winnerId ?? resultData?.winnerId ?? null, youWon: (match.winnerId ?? resultData?.winnerId) === userId, payout: totalPool - fee, verificationId: match.verificationId, createdAt: match.createdAt.toISOString(), settledAt: match.settledAt?.toISOString() ?? null, signalSentAt: null, yourReady: false, opponentReady: false };
+  return { matchId: match.id, gameType: match.gameType, stake: match.stake, totalPool, platformFee: fee, status: match.status, isPlayer1, playerIsHome: resultData?.homePlayerId === userId, opponent: { username: opponentUsername, userId: opponent.id, avatar: opponentAvatar }, result: resultData, winnerId: match.winnerId ?? resultData?.winnerId ?? null, youWon: (match.winnerId ?? resultData?.winnerId) === userId, payout: totalPool - fee, verificationId: match.verificationId, createdAt: match.createdAt.toISOString(), settledAt: match.settledAt?.toISOString() ?? null, signalSentAt: null, serverNow: Date.now(), lifecycleStartedAt: match.createdAt.getTime(), yourReady: false, opponentReady: false };
 }
 
 export async function settleCoinFlip(userId: string, matchId: string) {
