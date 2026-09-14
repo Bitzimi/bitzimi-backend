@@ -1,0 +1,34 @@
+name: Apply Coin Flip Sync Fix
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  apply:
+    if: true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply backend synchronization fields
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('src/modules/games/matchmaking/coinFlipMatchmaking.service.ts')
+          s = p.read_text()
+          marker = '  return { matchId: match.id, gameType: match.gameType, stake: match.stake, totalPool, platformFee: fee, status: match.status, isPlayer1, playerIsHome: resultData?.homePlayerId === userId, opponent: { username: opponentUsername, userId: opponent.id, avatar: opponentAvatar }, result: resultData, winnerId: match.winnerId ?? resultData?.winnerId ?? null, youWon: (match.winnerId ?? resultData?.winnerId) === userId, payout: totalPool - fee, verificationId: match.verificationId, createdAt: match.createdAt.toISOString(), settledAt: match.settledAt?.toISOString() ?? null, signalSentAt: null, yourReady: false, opponentReady: false };'
+          replacement = '  return { matchId: match.id, gameType: match.gameType, stake: match.stake, totalPool, platformFee: fee, status: match.status, isPlayer1, playerIsHome: resultData?.homePlayerId === userId, opponent: { username: opponentUsername, userId: opponent.id, avatar: opponentAvatar }, result: resultData, winnerId: match.winnerId ?? resultData?.winnerId ?? null, youWon: (match.winnerId ?? resultData?.winnerId) === userId, payout: totalPool - fee, verificationId: match.verificationId, createdAt: match.createdAt.toISOString(), settledAt: match.settledAt?.toISOString() ?? null, signalSentAt: null, serverNow: Date.now(), lifecycleStartedAt: match.createdAt.getTime(), yourReady: false, opponentReady: false };'
+          assert marker in s
+          p.write_text(s.replace(marker, replacement, 1))
+      - name: Commit backend fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/modules/games/matchmaking/coinFlipMatchmaking.service.ts
+          git diff --cached --check
+          git commit -m "Expose synchronized Coin Flip lifecycle timing" || exit 0
+          git push
