@@ -28,11 +28,17 @@ export async function matchmakingRoutes(app: FastifyInstance) {
 
   app.get("/matches/:matchId", async (req, reply) => {
     const { matchId } = req.params as { matchId: string };
-    const match = await getCoinFlipMatch(req.user.sub, matchId).catch(async err => {
+    const data = await getCoinFlipMatch(req.user.sub, matchId).catch(async err => {
       if ((err as any)?.statusCode !== 404) throw err;
       return getMatch(req.user.sub, matchId);
     });
-    return reply.send({ data: match });
+    // Reaction Tap needs the same read-only winner amount that Coin Flip exposes.
+    // This is derived server-side from the authoritative pool and configured fee;
+    // no game outcome or settlement logic is changed here.
+    const responseData = data.gameType === "reaction_tap"
+      ? { ...data, winnerPayout: data.totalPool - data.platformFee }
+      : data;
+    return reply.send({ data: responseData });
   });
 
   app.post("/matches/:matchId/settle", async (req, reply) => {
