@@ -3,6 +3,7 @@ import { z } from "zod";
 import { authenticate } from "../../../middleware/authenticate";
 import { joinQueue, getQueueStatus, leaveQueue, getMatch, signalReady, submitTap, MatchGameType } from "./matchmaking.service";
 import { joinCoinFlipQueue, getCoinFlipMatch, settleCoinFlip } from "./coinFlipMatchmaking.service";
+import { getActiveMatchmaking, heartbeatMatchmakingQueue } from "./matchmaking.recovery.service";
 
 const VALID_GAME_TYPES: MatchGameType[] = ["dice_clash", "pvp_coinflip", "reaction_tap"];
 
@@ -13,6 +14,22 @@ export async function matchmakingRoutes(app: FastifyInstance) {
     const body = z.object({ gameType: z.enum(["dice_clash", "pvp_coinflip", "reaction_tap"]), stake: z.number().positive() }).parse(req.body);
     const data = body.gameType === "pvp_coinflip" ? await joinCoinFlipQueue(req.user.sub, body.stake) : await joinQueue(req.user.sub, body.gameType, body.stake);
     return reply.status(data.status === "matched" ? 200 : 202).send({ data });
+  });
+
+  // Read-only recovery check. It never creates a queue or match.
+  app.get("/queue/active", async (req, reply) => {
+    const query = z.object({
+      gameType: z.enum(["dice_clash", "pvp_coinflip", "reaction_tap"]),
+      stake: z.coerce.number().positive(),
+    }).parse(req.query);
+    return reply.send({ data: await getActiveMatchmaking(req.user.sub, query.gameType, query.stake) });
+  });
+
+  // Refresh the active-search lease. Once the lease expires, the queue is no longer matchable.
+  app.post("/queue/:queueId/heartbeat", async (req, reply) => {
+    const { queueId } = req.params as { queueId: string };
+    const data = await heartbeatMatchmakingQueue(req.user.sub, queueId);
+    return reply.send({ data });
   });
 
   app.get("/queue/:queueId", async (req, reply) => {
