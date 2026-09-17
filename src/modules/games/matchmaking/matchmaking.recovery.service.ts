@@ -18,6 +18,25 @@ export async function getActiveMatchmaking(userId: string, gameType: MatchGameTy
     return { status: "matched" as const, matchId: activeMatch.id, queueId: null };
   }
 
+  // Matched queue rows are the authoritative short-lived recovery handle for
+  // games whose backend result is settled immediately (Dice Clash / Coin Flip).
+  // This lets a reload reconnect to the existing match without buying in again.
+  const matchedQueue = await db.matchmakingQueue.findFirst({
+    where: {
+      userId,
+      gameType,
+      stake,
+      status: "matched",
+      matchId: { not: null },
+      expiresAt: { gt: new Date() },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+
+  if (matchedQueue?.matchId) {
+    return { status: "matched" as const, matchId: matchedQueue.matchId, queueId: matchedQueue.id };
+  }
+
   const queue = await db.matchmakingQueue.findFirst({
     where: {
       userId,
