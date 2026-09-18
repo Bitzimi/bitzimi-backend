@@ -302,10 +302,6 @@ export async function getMatch(userId: string, matchId: string) {
     verificationId: match.verificationId,
     createdAt:     match.createdAt.toISOString(),
     settledAt:     match.settledAt?.toISOString() ?? null,
-    // Shared server timeline. Clients use the same authoritative clock and
-    // match creation time so reloads/network delays cannot shift the countdown.
-    serverNow: Date.now(),
-    lifecycleStartedAt: match.createdAt.getTime(),
     // ReactionTap fields
     signalSentAt:  match.signalSentAt?.toISOString() ?? null,
     yourReady:     isPlayer1 ? match.player1Ready : match.player2Ready,
